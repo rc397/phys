@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.claude/
+.DS_Store
+
+# raw footage is far too big for git
+Videos/
+*.MOV
+
+# per-video calibration sidecars
+*.volare.json
+*.swing.json
