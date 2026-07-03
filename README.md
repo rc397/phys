@@ -1,28 +1,32 @@
 # phys - swing-ride motion analysis
 
-Analysis of a swing/pendulum fairground ride (the *Volare*) from two independent
-sources:
+Analysis of a rotating chair-swing fairground ride (the *Volare*, a wave swinger)
+from two independent sources:
 
-1. **Phone accelerometer** logs (phyphox, 100 Hz) - `ax, ay, az, aT` in m/s².
-2. **Video** of the ride - the swing angle θ(t) measured frame by frame.
+1. **Phone accelerometer** logs (phyphox, 100 Hz, ridden) - `ax, ay, az, aT` in m/s².
+2. **Video** of the ride (two cameras) - the chains' fly-out angle θ(t), measured
+   automatically frame by frame.
 
-The point where they meet is the physics: the tangential acceleration a swing
-should feel is **a = g·sin θ**. The video gives θ independently, so you can test
-that hypothesis against the accelerometer instead of assuming it.
+The physics linking them: the ride is a conical pendulum, so at fly-out angle θ
+from vertical, **tan θ = a_horizontal / g**. The videos give θ independently of the
+phone, so the model is tested rather than assumed. (The phone logs are linear
+acceleration, so on the rider **θ_accel = arctan(aT / g)** at steady state.)
 
 ## Layout
 
 ```
-accel.py        shared helpers: CSV loading, column sniffing, EMA, plot styling, output paths
-ema.py          EMA-smooth every channel (ax/ay/az/aT), one panel each
-ema_noz.py      EMA of the horizontal magnitude sqrt(ax^2+ay^2) (z excluded), with --auto / --log
-swing_angle.py  measure swing angle theta(t) from a video, frame by frame
-output/         generated PNGs + CSVs
-*.csv           raw accelerometer recordings
+accel.py         shared helpers: CSV loading, column sniffing, EMA, plot styling, output paths
+ema.py           EMA-smooth every channel (ax/ay/az/aT), one panel each
+ema_noz.py       EMA of the horizontal magnitude sqrt(ax^2+ay^2) (z excluded), with --auto / --log
+volare_angle.py  fly-out angle theta(t) from a ride video, fully automatic
+swing_angle.py   older tool for a planar (back-and-forth) pendulum ride
+output/          generated PNGs + CSVs
+*.csv            raw accelerometer recordings
+Videos/          raw footage (not in git - too large)
 ```
 
-`ema.py`, `ema_noz.py` and `swing_angle.py` all import the common code in `accel.py`,
-so loading/smoothing/styling lives in exactly one place.
+The analysis scripts import the common code in `accel.py`, so loading/smoothing/
+styling lives in exactly one place.
 
 ## Setup
 
@@ -48,82 +52,75 @@ and a matching CSV to `output/`.
 What the data shows: a queue/quiet period, an **exponential spin-up** of the swing
 amplitude, a sustained plateau at ~15–20 m/s² (≈1.5–2 g), then spin-down.
 
-## Video angle analysis
+## Fly-out angle from video (volare_angle.py) - fully automatic
 
-`swing_angle.py` measures the angle θ between the **straight part** (the vertical
-rest line through the pivot) and the **swing arm**, by tracking the seat and
-measuring its bearing from the pivot. It also writes **g·sin θ**, the tangential
-acceleration the swing model predicts, ready to overlay on the accelerometer trace.
-
-It's built for accuracy. By default it:
-- tracks the seat with **rotation-invariant ORB matching** to a reference frame, so
-  it keeps lock even as the seat spins, through motion blur, noise and compression;
-- recovers a **sub-pixel** seat position each frame from a RANSAC similarity fit;
-- **fits the pivot** from the whole swept arc by robust least-squares circle fit -
-  typically to a fraction of a pixel, so **you only mark the seat, not the pivot**;
-- drops low-confidence frames and prints a quality summary.
-
-Easiest - drag a box round the seat on the first frame:
+The ride is a rotating chair swing, i.e. a conical pendulum: at the fly-out angle
+θ from vertical, tan θ = a_horizontal / g, so the video angle ties directly to the
+accelerometer. `volare_angle.py` measures θ(t) from a video with **no clicking**:
 
 ```bash
-python swing_angle.py volare.mp4 --pick --annot
+python volare_angle.py "Videos/Alex's persepctive/probably trial 1.MOV" --annot
+python volare_angle.py --all          # every video under Videos/, plus a summary table
 ```
 
-Headless - if you know the seat's pixel position on the first analysed frame:
+How it works, per video:
+1. **Auto-calibration**: the ride region from fast motion (blurred pair-differences,
+   so camera micro-wobble on static edges is ignored), and the true vertical from
+   long building edges in the background (handles camera roll).
+2. **Measurement** (every frame): moving chairs are isolated by background
+   subtraction; on each side the extreme blob is the side-on chair - a rope at
+   azimuth φ shows tan θ' = tan θ·|cos φ|, so the extreme chair shows the TRUE
+   side-on angle. From its seat, rays are scanned up-and-inward for the chain in
+   the raw pixels: the winning ray must be **continuously covered** (crossing
+   ropes fail), **thin** (the canopy fails), and agree with a robust line refit.
+3. **Aggregation**: per time window the upper quartile per side, best side kept
+   (occlusion only ever lowers a reading), giving θ'(t) with a p10-p90 band -
+   the band also shows the rotor-tilt "wave".
+4. **Elevation correction**: the swept chair ring's lower boundary is an ellipse
+   arc whose axis ratio is sin(elevation); tan θ = tan θ'·cos(elevation). If the
+   ring bottom is hidden by scenery the tool says so (confidence flag) - trust
+   the apparent angle more than the corrected one in that case, or pass `--eps`.
+5. **Accelerometer tie-in**: for trials with a phone log it overlays
+   θ_accel = arctan(aT/g) on the video curve (aligned by cross-correlation) and
+   compares the steady states.
 
-```bash
-python swing_angle.py volare.mp4 --point 640,560 --bbox 70 --annot
-```
-
-`--annot` writes `<video>_angle_annot.mp4` with the fitted pivot, the live arm and the
-angle drawn on - **watch it first** to confirm the tracking followed the seat. A
-`<video>.swing.json` sidecar remembers what you clicked, so a later rerun is just
-`python swing_angle.py volare.mp4`.
-
-### Options
+Output per video: `output/<video>_angle.png` (θ(t) + band + steady state and
+g·tan θ), a CSV, with `--annot` a check video with the protractor gauge drawn on
+every measured chain, and `output/<video>_vs_accel.png` where phone data exists.
 
 | flag | meaning |
 |------|---------|
-| `--point X,Y` | seat position on the first analysed frame (**original-video** pixels) |
-| `--pick` | drag a box round the seat interactively instead |
-| `--bbox N` | seat box side in px (the patch ORB learns / the template) |
-| `--track rigid` | ORB feature match **(default, most accurate; needs some texture)** |
-| `--track template` | sub-pixel luma cross-correlation (good fallback for low-texture seats) |
-| `--track color/flow/mil/manual` | HSV blob / optical flow / OpenCV box tracker / click each frame |
-| `--pivot X,Y` `--no-fit-pivot` | give the pivot instead of fitting it (needed if the swing barely moves) |
-| `--ref vertical \| X,Y` | "straight" reference: vertical (default) or a point down the mast |
-| `--center` | measure from the swing's **mean (equilibrium)** position - cancels camera roll and a sloppy seed |
-| `--min-conf F` | drop frames below F× the median tracking confidence (default 0.25) |
-| `--rotate 90\|180\|270`, `--resize W` | rotate a sideways clip / downscale for speed (coords mapped through both) |
-| `--start/--end T`, `--step K` | analyse a time range / every K-th frame |
-| `--flip`, `--smooth N` | flip the angle sign / EMA span for the smoothed line (default 11) |
-
-Numeric `--point/--pivot/--ref` are given in **original-video pixels** - the script
-maps them through the same rotate+resize the frames go through. (`--pick` coords are
-taken straight from the frames you click.)
-
-Output: `output/<video>_angle.png` (angle and g·sin θ vs time) and a CSV with
-`time, x, y, confidence, valid, angle_deg, angle_deg_ema, g_sin_theta`.
-
-### Tips for a real ride video
-
-- **Mark a textured part of the seat/gondola** (structure, railings, riders) - ORB
-  needs texture. If the seat is a plain blob, use `--track template` instead.
-- For **full accuracy** keep full resolution and `--step 1` (the default); use
-  `--resize`/`--step` only to preview quickly.
-- Use **`--center`** if the camera is slightly rolled or you're unsure your seed sits
-  exactly on the seat centre - it measures from the swing's own equilibrium.
-- Always **sanity-check the `--annot` video** before trusting the numbers.
+| `--all` | run every video under `Videos/`, write `output/flyout_summary.csv` |
+| `--annot` | write the verification video (watch it before trusting numbers) |
+| `--debug` | dump calibration overlays + gate rejection counts |
+| `--eps E` | override the camera elevation (deg) |
+| `--win S` / `--step K` | aggregation window (default 3 s) / frame stride |
+| `--start/--end T` | limit the analysed time range |
+| `--recal` | ignore the cached auto-calibration sidecar |
 
 ### Validated accuracy
 
-Against a synthetic HD swing with a *rotating textured seat*, sensor noise, motion
-blur and known ground-truth angle:
+Against a synthetic wave-swinger (16 chairs, spinning patterned canopy, cluttered
+background with vertical building edges and horizontal rails, camera elevation 15°,
+camera roll 2°, sensor noise) with known ground truth, zero manual input:
 
-| scenario | mean error | max error |
-|----------|-----------:|----------:|
-| fixed/stabilised camera, full res (default) | **0.02°** | 0.05° |
-| lossy (mp4) vs lossless - no difference | 0.02° | 0.05° |
-| `--resize 640` (speed mode) | 0.15° | - |
+| quantity | result | truth |
+|----------|--------|-------|
+| steady fly-out | 39.6 ± 0.3° | 40.00° |
+| θ(t) RMS over ramp/plateau/spin-down | 1.7° | - |
+| camera roll detected | +1.97° | +2.0° |
+| camera elevation from the chair ring | 15.9° | 15° |
 
-All driftless (correlation > 0.9999) and unaffected by `--rotate`/`--resize`.
+Uncertainty on real footage: the statistical precision is ~±1° (per-trial sd),
+and the dominant systematic is the camera-elevation estimate, worth roughly ±3°
+on the absolute angle (the tool prints a confidence flag; pass `--eps` if you
+know the camera's elevation). On trial 1 the video gives 47.9° (Alex's camera,
+elevation trusted) vs the phone's arctan(aT/g) = 50.9° - independent instruments
+agreeing within that systematic.
+
+## Planar swing tool (swing_angle.py)
+
+An earlier tool for a back-and-forth (planar) pendulum ride: tracks the seat with
+ORB feature matching (~0.02° on synthetic), fits the pivot from the swept arc, and
+writes the swing angle + g·sin θ. Kept for reference; the Volare is a rotating
+ride, so `volare_angle.py` is the tool for this project's videos.

@@ -1,11 +1,30 @@
-# Fly-out angle of the chair-swing (Volare) from video.
-# Angle between the ride's vertical (marked with 2 dots on the central support, since
-# the rotor tilts / the camera may be rolled) and the rope holding a chair as it swings.
-# Conical pendulum: tan(theta) = a_horizontal / g, which ties to the accelerometer.
-#   python volare_angle.py "trial 1.mp4" --pick --watch    # auto-detect at a checkpoint box
-#   python volare_angle.py "trial 1.mp4" --pick --mark      # click the rope each pass
+# Fly-out angle of the chair-swing ride (Volare) from video, fully automatic.
+#
+# Physics: conical pendulum, tan(theta) = a_horizontal / g. On video, a chain at
+# azimuth phi around the ride shows a foreshortened apparent angle, biggest for
+# the chairs seen side-on; the per-frame measurements therefore have a hard upper
+# edge, which deproject() converts to the true theta in closed form.
+#
+# Pipeline per video, no clicks:
+#   1. auto-calibrate: ride region from fast motion (blurred pair-differences so
+#      camera micro-wobble is ignored), true vertical from long building edges in
+#      the background (-> camera roll)
+#   2. sequential pass: moving chairs by background subtraction; per side the
+#      extreme blob is the side-on chair; from its seat, rays are scanned up and
+#      inward for the chain in the raw pixels - the winning ray must be covered
+#      continuously (crossing ropes fail), thin (the canopy fails) and agree with
+#      a robust line refit
+#   3. aggregate per time window (upper quantile per side, best side), estimate
+#      the camera elevation from the swept chair ring, deproject, steady state
+#
+#   python volare_angle.py "trial 1.MOV" --annot     # one video + check video
+#   python volare_angle.py --all                     # every video in Videos/
+#
+# Compare with the phone: the logs are linear acceleration, so at steady state
+# theta_accel = arctan(aT / g).
 
 import argparse
+import glob
 import json
 import os
 import sys
@@ -18,336 +37,648 @@ import accel
 
 G = 9.81
 HERE = os.path.dirname(os.path.abspath(__file__))
+PROC_W = 1280         # all mask work happens at this width (thin chains need it)
+
+
+def camera_tag(video):
+    # both cameras use the same clip names, so outputs carry the camera's name
+    parent = os.path.basename(os.path.dirname(os.path.abspath(video))).lower()
+    for name in ("alex", "ryan"):
+        if name in parent:
+            return name
+    return "".join(c for c in parent if c.isalnum())[:10] or "cam"
 
 
 def sidecar(video):
     return os.path.splitext(video)[0] + ".volare.json"
 
 
+def masks_path(video):
+    return os.path.splitext(video)[0] + ".volare_masks.npz"
+
+
 def down(v):
-    """Orient a 2-vector to point downward in the image (positive y)."""
     v = np.asarray(v, float)
     return v if v[1] >= 0 else -v
 
 
 def angle_from_vertical(d, vref):
-    """Unsigned angle (deg) between rope direction d and the vertical reference vref.
-    Both are oriented downward, so 0 = along the support, larger = flung out."""
+    # unsigned angle (deg) between rope direction d and the vertical reference
     d, vref = down(d), down(vref)
     cross = abs(d[0] * vref[1] - d[1] * vref[0])
     dot = d[0] * vref[0] + d[1] * vref[1]
     return float(np.degrees(np.arctan2(cross, dot)))
 
 
-def rope_dir(roi_bgr, fill_lo=0.03, fill_hi=0.75):
-    """Direction of the dark rope+chair inside a sky box, by PCA. Returns
-    (dir_vector, fill_fraction, dark_mask, centroid) or None when empty/blocked."""
-    import cv2
-    g = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
-    _, dark = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    frac = float((dark > 0).mean())
-    if not (fill_lo < frac < fill_hi):
-        return None
-    ys, xs = np.where(dark > 0)
-    pts = np.column_stack([xs, ys]).astype(np.float64)
-    mean = pts.mean(0)
-    cov = np.cov((pts - mean).T)                       # 2x2 -> principal axis (O(N), fast)
-    evals, evecs = np.linalg.eigh(cov)
-    d = down(evecs[:, int(np.argmax(evals))])
-    proj = (pts - mean) @ d                            # apex = top end of the rope along d
-    apex = mean + d * proj.min()
-    return d, frac, dark, mean, apex
+def deproject(theta_deg, eps_deg):
+    """True fly-out angle from the MAXIMUM apparent chain angle over the chairs.
+
+    With the camera raised by eps, the steepest-looking chain is not the side-on
+    chair but one slightly on the near side, tilted toward the camera:
+        tan(theta'_max) = sin(theta) / sqrt(cos^2(theta)cos^2(eps) - sin^2(theta)sin^2(eps))
+    which inverts in closed form to
+        tan(theta) = T cos(eps) / sqrt(1 + T^2 sin^2(eps)),  T = tan(theta'_max).
+    At eps = 0 this reduces to theta = theta'."""
+    T = np.tan(np.radians(theta_deg))
+    e = np.radians(eps_deg)
+    return float(np.degrees(np.arctan(T * np.cos(e) / np.sqrt(1 + T * T * np.sin(e) ** 2))))
 
 
-def draw_gauge(img, apex, vref, d, ang, off=(0, 0)):
-    """Protractor-style angle read-out: vertical ray + rope ray + filled wedge + value."""
+def banner(img, lines):
     import cv2
-    ap = (int(apex[0] + off[0]), int(apex[1] + off[1]))
-    Lv, Lr, R = 150, 130, 78
+    cv2.rectangle(img, (0, 0), (img.shape[1], 30 + 26 * len(lines)), (0, 0, 0), -1)
+    for i, s in enumerate(lines):
+        cv2.putText(img, s, (12, 24 + 26 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.65,
+                    (0, 255, 255) if i == 0 else (230, 230, 230), 2, cv2.LINE_AA)
+
+
+def draw_gauge(img, apex, vref, d, ang):
+    # vertical ray + rope ray + filled wedge + the angle value
+    import cv2
+    ap = (int(apex[0]), int(apex[1]))
+    Lv, Lr, R = 110, 95, 55
     av = np.degrees(np.arctan2(vref[1], vref[0]))
     ad = np.degrees(np.arctan2(d[1], d[0]))
     a0, a1 = (av, ad) if (ad - av) % 360 <= 180 else (ad, av)
     ov = img.copy()
-    cv2.ellipse(ov, ap, (R, R), 0, a0, a1, (60, 200, 255), -1)        # filled wedge
+    cv2.ellipse(ov, ap, (R, R), 0, a0, a1, (60, 200, 255), -1)
     cv2.addWeighted(ov, 0.40, img, 0.60, 0, img)
     cv2.ellipse(img, ap, (R, R), 0, a0, a1, (60, 200, 255), 2, cv2.LINE_AA)
     ve = (int(ap[0] + vref[0] * Lv), int(ap[1] + vref[1] * Lv))
     re = (int(ap[0] + d[0] * Lr), int(ap[1] + d[1] * Lr))
-    cv2.line(img, ap, ve, (255, 255, 255), 2, cv2.LINE_AA)            # vertical (white)
-    cv2.line(img, ap, re, (40, 150, 255), 4, cv2.LINE_AA)            # rope (orange)
-    cv2.circle(img, ap, 6, (40, 150, 255), -1, cv2.LINE_AA)
-    mid = (down(vref) + down(d)); n = np.hypot(*mid)
+    cv2.line(img, ap, ve, (255, 255, 255), 2, cv2.LINE_AA)
+    cv2.line(img, ap, re, (40, 150, 255), 3, cv2.LINE_AA)
+    cv2.circle(img, ap, 5, (40, 150, 255), -1, cv2.LINE_AA)
+    mid = down(vref) + down(d)
+    n = np.hypot(*mid)
     mid = mid / n if n else np.array([0, 1.0])
-    lp = (int(ap[0] + mid[0] * (R + 18)), int(ap[1] + mid[1] * (R + 18)) + 8)
-    cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 5, cv2.LINE_AA)
-    cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 1.1, (60, 200, 255), 2, cv2.LINE_AA)
+    lp = (int(ap[0] + mid[0] * (R + 14)), int(ap[1] + mid[1] * (R + 14)) + 6)
+    cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
+    cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 200, 255), 2, cv2.LINE_AA)
 
 
-def deproject(theta_deg, eps_deg):
-    return float(np.degrees(np.arctan(np.tan(np.radians(theta_deg)) * np.cos(np.radians(eps_deg)))))
+# --------------------------------------------------------------------- stage 1
 
-
-# --------------------------------------------------------------------- calibrate
-
-def banner(img, lines):
-    """Big readable instruction text on a dark strip at the top."""
+def detect_vertical(bg_gray, exclude, min_len):
+    # camera roll from long near-vertical background edges (building/pylon lines)
     import cv2
-    cv2.rectangle(img, (0, 0), (img.shape[1], 38 + 34 * len(lines)), (0, 0, 0), -1)
-    for i, s in enumerate(lines):
-        cv2.putText(img, s, (16, 32 + 34 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.9,
-                    (0, 255, 255) if i == 0 else (235, 235, 235), 2, cv2.LINE_AA)
+    edges = cv2.Canny(bg_gray, 50, 140)
+    edges[exclude > 0] = 0
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 360, threshold=60,
+                            minLineLength=int(min_len), maxLineGap=6)
+    if lines is None:
+        return 0.0, 0
+    angs, wts = [], []
+    for x1, y1, x2, y2 in lines[:, 0]:
+        dx, dy = x2 - x1, y2 - y1
+        if dy == 0:
+            continue
+        a = np.degrees(np.arctan2(dx, dy))          # signed, from image-vertical
+        if a > 90:
+            a -= 180
+        if a < -90:
+            a += 180
+        if abs(a) <= 10:
+            angs.append(a)
+            wts.append(np.hypot(dx, dy))
+    if not angs:
+        return 0.0, 0
+    order = np.argsort(angs)
+    angs, wts = np.array(angs)[order], np.array(wts)[order]
+    cum = np.cumsum(wts)
+    roll = float(angs[np.searchsorted(cum, cum[-1] / 2)])   # weighted median
+    return roll, len(angs)
 
 
-def calibrate(cap, video, eps, disp_w):
-    """One big window, 4 labelled clicks: 2 for the vertical support, 2 for the box."""
+def auto_calibrate(video, cap, fps, ntot, args):
+    """Sample the video and derive: ride ROI, canopy mask, rim ellipse (elevation),
+    and the true vertical. Cached in a sidecar + npz unless --recal."""
     import cv2
-    cap.set(cv2.CAP_PROP_POS_FRAMES, int(cap.get(cv2.CAP_PROP_FRAME_COUNT) * 0.5))
-    ok, f = cap.read()
-    if not ok:
-        sys.exit("could not read a frame to calibrate on")
-    H, W = f.shape[:2]
-    ds = disp_w / W                                    # display scale; clicks map back by /ds
-    base = cv2.resize(f, (disp_w, int(H * ds)))
-    labels = ["1/4  click the TOP of the vertical support pole",
-              "2/4  click the BOTTOM of the vertical support pole",
-              "3/4  click ONE corner of the checkpoint box (sky where the chair swings)",
-              "4/4  click the OPPOSITE corner of the box"]
-    clicks = []                                        # stored in ORIGINAL pixels
-    win = "calibrate  (u = undo,  Enter = confirm,  Esc = cancel)"
-    cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(win, lambda e, x, y, *_: clicks.append((x / ds, y / ds))
-                         if e == cv2.EVENT_LBUTTONDOWN and len(clicks) < 4 else None)
+    if not args.recal and os.path.exists(sidecar(video)) and os.path.exists(masks_path(video)):
+        with open(sidecar(video)) as fh:
+            cal = json.load(fh)
+        if cal.get("version") == 4:
+            m = np.load(masks_path(video))
+            cal["roi"] = m["roi"]
+            print(f"(calibration loaded from {os.path.basename(sidecar(video))})")
+            return cal
 
-    def sp(p):
-        return int(p[0] * ds), int(p[1] * ds)
-    while True:
-        d = base.copy()
-        for p in clicks:
-            cv2.circle(d, sp(p), 6, (0, 0, 255), -1, cv2.LINE_AA)
-        if len(clicks) >= 2:
-            cv2.line(d, sp(clicks[0]), sp(clicks[1]), (0, 0, 255), 2, cv2.LINE_AA)
-        if len(clicks) >= 4:
-            cv2.rectangle(d, sp(clicks[2]), sp(clicks[3]), (0, 230, 0), 2)
-        i = len(clicks)
-        banner(d, [labels[i] if i < 4 else "Done - press ENTER to save  (u = undo)"])
-        cv2.imshow(win, d)
-        k = cv2.waitKey(20) & 0xFF
-        if k == ord("u") and clicks:
-            clicks.pop()
-        elif k in (13, 10) and len(clicks) == 4:
-            break
-        elif k == 27:
-            sys.exit("cancelled")
-    cv2.destroyAllWindows()
-    (cx0, cy0), (cx1, cy1) = clicks[2], clicks[3]
-    box = [int(min(cx0, cx1)), int(min(cy0, cy1)), int(max(cx0, cx1)), int(max(cy0, cy1))]
-    cal = {"vref": [list(clicks[0]), list(clicks[1])], "roi": box, "eps_deg": eps}
-    json.dump(cal, open(sidecar(video), "w"), indent=2)
-    print(f"saved calibration -> {os.path.basename(sidecar(video))}  box={box}")
+    W0 = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H0 = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    sc = PROC_W / W0
+    Hs = int(round(H0 * sc))
+    gap = max(2, int(round(0.2 * fps)))             # pair spacing: 0.2 s
+    K = 90
+    anchors = np.linspace(0.04 * ntot, 0.95 * ntot - gap, K).astype(int)
+
+    fast_masks, grays = [], []
+    for a in anchors:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(a))
+        ok, f0 = cap.read()
+        for _ in range(gap - 1):
+            cap.grab()
+        ok2, f1 = cap.read()
+        if not (ok and ok2):
+            continue
+        f0 = cv2.resize(f0, (PROC_W, Hs))
+        f1 = cv2.resize(f1, (PROC_W, Hs))
+        g0 = cv2.cvtColor(f0, cv2.COLOR_BGR2GRAY)
+        g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
+        # blur first: 1-px camera wobble makes every static edge flicker, while
+        # real ride motion covers tens of pixels in 0.2 s and easily survives
+        g0b = cv2.GaussianBlur(g0, (5, 5), 0)
+        g1b = cv2.GaussianBlur(g1, (5, 5), 0)
+        fast_masks.append(cv2.absdiff(g0b, g1b) > 18)
+        grays.append(g0)
+    fast_masks = np.stack(fast_masks)
+
+    # keep only samples where the ride is actually running
+    activity = fast_masks.reshape(len(fast_masks), -1).sum(1)
+    active = activity > 0.25 * activity.max()
+    if active.sum() < 8:
+        active = activity >= np.partition(activity, -8)[-8]
+    mot = fast_masks[active].mean(0)
+
+    # ride region: where fast motion happens at all often
+    env = (mot > 0.10).astype(np.uint8) * 255
+    env = cv2.morphologyEx(env, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8))
+    env = cv2.morphologyEx(env, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    nlab, lab, stats, _ = cv2.connectedComponentsWithStats(env, 8)
+    if nlab < 2:
+        sys.exit("calibration failed: no moving ride found")
+    big = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    roi = (lab == big).astype(np.uint8) * 255
+    roi = cv2.dilate(roi, np.ones((int(0.02 * PROC_W),) * 2, np.uint8))
+    rys, rxs = np.where(roi > 0)
+
+    # true vertical from static background edges, away from the ride
+    med_bg = np.median(np.stack(grays), 0).astype(np.uint8)
+    roll, nlines = detect_vertical(med_bg, cv2.dilate(roi, np.ones((25, 25), np.uint8)),
+                                   min_len=0.12 * Hs)
+    vref = [float(np.sin(np.radians(roll))), float(np.cos(np.radians(roll)))]
+
+    cal = {"version": 4, "scale": sc,
+           "roll_deg": round(roll, 2), "n_vert_lines": int(nlines),
+           "axis_x": float(rxs.mean()),
+           "roi": roi}
+    np.savez_compressed(masks_path(video), roi=roi)
+    slim = {k: v for k, v in cal.items() if k != "roi"}
+    with open(sidecar(video), "w") as fh:
+        json.dump(slim, fh, indent=2)
+
+    if args.debug:
+        dbg = cv2.cvtColor(med_bg, cv2.COLOR_GRAY2BGR)
+        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(dbg, cnts, -1, (0, 255, 0), 2)
+        cv2.line(dbg, (int(cal["axis_x"]), 0), (int(cal["axis_x"]), Hs), (0, 255, 255), 1)
+        x0 = int(PROC_W / 2)
+        cv2.line(dbg, (x0, 0), (int(x0 + vref[0] * Hs), int(vref[1] * Hs)), (255, 255, 0), 1)
+        d = args.outdir or os.path.join(HERE, "output")
+        os.makedirs(d, exist_ok=True)
+        base = os.path.splitext(os.path.basename(video))[0]
+        cv2.imwrite(os.path.join(d, base + "_debug_cal.png"), dbg)
+        cv2.imwrite(os.path.join(d, base + "_debug_mot.png"),
+                    cv2.applyColorMap((np.clip(mot, 0, 1) * 255).astype(np.uint8),
+                                      cv2.COLORMAP_JET))
     return cal
 
 
-# ------------------------------------------------------------------- manual mark
+# --------------------------------------------------------------------- stage 2
 
-def run_mark(cap, fps, box, vref, eps, f_lo, f_hi, step, disp_w):
-    """Click the rope (top, then chair) on each frame you want; angle vs vref."""
+def measure(cap, fps, ntot, cal, args, video):
+    """Sequential pass. Per frame and side, the extreme moving blob is the side-on
+    chair; seat+rider hang along the rope, so the blob's principal axis IS the rope
+    direction. A line refit on the raw pixels around that axis sharpens it.
+    Also logs every sizable blob centroid: at the plateau the chairs trace the cone
+    base, an ellipse whose axis ratio gives the camera elevation."""
     import cv2
-    x0, y0, x1, y1 = box
-    win = "MARK: click rope TOP then CHAIR (2 clicks) | n=skip  u=undo  q=done"
-    cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-    clicks = []
-    cv2.setMouseCallback(win, lambda e, x, y, *_: clicks.append((float(x), float(y)))
-                         if e == cv2.EVENT_LBUTTONDOWN else None)
-    times, angles = [], []
-    fi = f_lo
-    cap.set(cv2.CAP_PROP_POS_FRAMES, f_lo)
-    while fi < f_hi:
+    roi = cal["roi"]
+    Hs = roi.shape[0]
+    axis_x = cal["axis_x"]
+    vref = np.array([np.sin(np.radians(cal["roll_deg"])), np.cos(np.radians(cal["roll_deg"]))])
+    rys, rxs = np.where(roi > 0)
+    roi_w = rxs.max() - rxs.min() if len(rxs) else PROC_W
+    roi_h = rys.max() - rys.min() if len(rys) else Hs
+    slab_w = max(16, int(0.07 * roi_w))
+    a_min = max(35, int(2.2e-4 * roi_w * roi_h))
+    kernel_open = np.ones((2, 2), np.uint8)
+    kernel_join = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
+
+    step = args.step or max(1, int(round(fps / 30)))
+    f_lo = int((args.start or 0) * fps)
+    f_hi = int(args.end * fps) if args.end else ntot
+    warm = int(3 * fps)
+    mog = cv2.createBackgroundSubtractorMOG2(history=int(8 * fps / step),
+                                             varThreshold=16, detectShadows=True)
+    start = max(0, f_lo - warm)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start)           # calibration moved the read head
+    meas_from = start + warm                          # let MOG2 settle first
+
+    meas = []                                        # (t, side, theta_apparent, agree)
+    sweeps = {}                                      # per-window unions of the chair mask
+    annot_frames = []
+    rej = {"few_px": 0, "few_side": 0, "no_chain": 0, "refit": 0, "range": 0, "kept": 0}
+    next_annot = -1e9
+    fi = start - 1
+    while True:
         ok, frame = cap.read()
         if not ok:
             break
-        if (fi - f_lo) % step:
-            fi += 1
-            continue
-        clicks.clear()
-        while True:
-            d = frame.copy()
-            cv2.line(d, tuple(map(int, vref_pts[0])), tuple(map(int, vref_pts[1])), (0, 0, 255), 2)
-            cv2.rectangle(d, (x0, y0), (x1, y1), (0, 200, 0), 1)
-            for cpt in clicks:
-                cv2.circle(d, (int(cpt[0]), int(cpt[1])), 5, (0, 255, 255), -1, cv2.LINE_AA)
-            if len(clicks) >= 2:
-                dvec = down(np.array(clicks[1]) - np.array(clicks[0]))
-                ang = angle_from_vertical(dvec, vref)
-                ang = deproject(ang, eps) if eps else ang
-                draw_gauge(d, clicks[0], vref, dvec, ang)
-            banner(d, [f"t={fi/fps:5.1f}s   click rope TOP then CHAIR",
-                       "Enter = keep   n = skip   u = undo   q = done"])
-            sc = disp_w / d.shape[1]
-            cv2.imshow(win, cv2.resize(d, None, fx=sc, fy=sc))
-            k = cv2.waitKey(20) & 0xFF
-            if k == ord("u"):
-                clicks.clear()
-            elif k == ord("n"):
-                break
-            elif k == ord("q"):
-                cv2.destroyAllWindows()
-                return np.array(times), np.array(angles)
-            elif k in (13, 10) and len(clicks) >= 2:
-                ang = angle_from_vertical(np.array(clicks[1]) - np.array(clicks[0]), vref)
-                times.append(fi / fps)
-                angles.append(deproject(ang, eps) if eps else ang)
-                break
         fi += 1
-    cv2.destroyAllWindows()
-    return np.array(times), np.array(angles)
+        if fi >= f_hi:
+            break
+        if fi % step:
+            continue
+        small = cv2.resize(frame, (PROC_W, Hs))
+        fg = mog.apply(small)
+        if fi < f_lo or fi < meas_from:
+            continue
+        raw = ((fg >= 200) & (roi > 0)).astype(np.uint8) * 255
+        chair = cv2.morphologyEx(raw, cv2.MORPH_OPEN, kernel_open)
+        chair = cv2.morphologyEx(chair, cv2.MORPH_CLOSE, kernel_join)
+        n_ch = cv2.countNonZero(chair)
+        if n_ch < a_min:
+            rej["few_px"] += 1
+            continue
+        nlab, lab, stats, cent = cv2.connectedComponentsWithStats(chair, 8)
+        t = fi / fps
+        w = int(t // args.win)
+        if w not in sweeps:
+            sweeps[w] = np.zeros((Hs, PROC_W), np.uint8)
+        sweeps[w] |= chair
+        # raw pixels for the chain search
+        rys_, rxs_ = np.where(raw > 0)
+        p_r = np.column_stack([rxs_, rys_]).astype(np.float32)
+        got = []
+        for side in ("left", "right"):
+            # the frame's own extreme blob on this side, not clipped by the border
+            side_ok = [li for li in range(1, nlab)
+                       if stats[li, cv2.CC_STAT_AREA] >= a_min
+                       and (cent[li][0] < axis_x if side == "left" else cent[li][0] > axis_x)
+                       and stats[li, cv2.CC_STAT_LEFT] > 2
+                       and stats[li, cv2.CC_STAT_LEFT] + stats[li, cv2.CC_STAT_WIDTH] < PROC_W - 2]
+            if not side_ok:
+                rej["few_side"] += 1
+                continue
+            if side == "left":
+                li = min(side_ok, key=lambda i: stats[i, cv2.CC_STAT_LEFT])
+            else:
+                li = max(side_ok, key=lambda i: stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH])
+            bys, bxs = np.where(lab == li)
+            by = bys.max()
+            bot = np.array([float(np.mean(bxs[bys >= by - 3])), float(by)], np.float32)
+            # typical seat size this frame (median over blobs, so a blob that merged
+            # with the canopy cannot inflate it)
+            hs_all = [stats[i, cv2.CC_STAT_HEIGHT] for i in range(1, nlab)
+                      if stats[i, cv2.CC_STAT_AREA] >= a_min]
+            h_seat = float(np.clip(np.median(hs_all), 8, 0.12 * roi_h))
+            # scan rays from the seat BOTTOM (the canopy is never below a chair),
+            # skipping the seat body, for the thin continuous chain in raw pixels
+            L_skip = 0.9 * h_seat
+            L_ray = L_skip + 3.5 * h_seat
+            sgn = 1.0 if side == "left" else -1.0     # chains rise toward the axis
+            nb = ((np.abs(p_r[:, 0] - bot[0]) <= L_ray + 10)
+                  & (p_r[:, 1] <= bot[1] + 2) & (p_r[:, 1] >= bot[1] - L_ray - 10))
+            q = p_r[nb] - bot
+            if len(q) < 12:
+                rej["no_chain"] += 1
+                continue
+            n_bins = max(4, int((L_ray - L_skip) // 4))
+            best = None
+            for adeg in range(3, 66, 2):
+                u = np.array([sgn * np.sin(np.radians(adeg)), -np.cos(np.radians(adeg))],
+                             np.float32)
+                proj = q @ u
+                perp = np.abs(q @ np.array([-u[1], u[0]], np.float32))
+                in_range = (proj > L_skip) & (proj < L_ray)
+                on = in_range & (perp <= 3.5)
+                if on.sum() < 10:
+                    continue
+                # a real chain fills the ray CONTINUOUSLY; ropes merely crossing the
+                # ray fill only the crossing points, so score by bin coverage
+                filled = len(np.unique(((proj[on] - L_skip) // 4).astype(int)))
+                cover = filled / n_bins
+                if cover < 0.55:
+                    continue
+                # and a chain is THIN: rays through a dense 2-D region (the canopy)
+                # have far more pixels just outside the narrow band
+                wide = in_range & (perp <= 10.0)
+                if wide.sum() > 1.8 * on.sum():
+                    continue
+                if best is None or cover > best[0]:
+                    best = (cover, adeg, on)
+            if best is None:
+                rej["no_chain"] += 1
+                continue
+            _, adeg, on = best
+            pts = q[on] + bot
+            vx, vy, x0, y0 = cv2.fitLine(pts, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+            nline = np.array([-vy, vx])
+            resid = float(np.mean(np.abs((pts - [x0, y0]) @ nline)))
+            ang = angle_from_vertical(np.array([vx, vy]), vref)
+            # scan and refit must agree, and the support must look like a line
+            if resid > 2.5 or abs(ang - adeg) > 5.0:
+                rej["refit"] += 1
+                continue
+            if not (3.0 <= ang <= 65.0):
+                rej["range"] += 1
+                continue
+            rej["kept"] += 1
+            meas.append((t, side, ang, 1.0))
+            gauge_at = pts[int(np.argmin(pts[:, 1]))]
+            got.append((side, gauge_at, down(np.array([vx, vy])), ang))
+        if args.annot and got and t >= next_annot:
+            next_annot = t + 0.4
+            d = small.copy()
+            for side, top, dv, ang in got:
+                dvn = dv / (np.hypot(*dv) + 1e-9)
+                draw_gauge(d, top, vref, dvn, ang)
+            banner(d, [f"t={t:6.1f}s"])
+            annot_frames.append(d)
+    if args.debug:
+        print("Gates:   " + "  ".join(f"{k}={v}" for k, v in rej.items()))
+    return meas, sweeps, annot_frames
 
 
-vref_pts = None    # set in main so run_mark can draw the actual clicked endpoints
+# --------------------------------------------------------------------- stage 3
+
+def aggregate(meas, args):
+    """Window the raw measurements into apparent theta(t) with a band."""
+    m = pd.DataFrame(meas, columns=["t", "side", "theta", "agree"])
+    win = args.win
+    m["w"] = (m["t"] // win).astype(int)
+    rows = []
+    for w, grp in m.groupby("w"):
+        # the target is the UPPER edge of the per-frame distribution (the maximum
+        # apparent angle over the chairs, which deproject() inverts exactly);
+        # chairs at other azimuths and occluded sides only contaminate from below
+        per_side = grp.groupby("side")["theta"].quantile(0.85)
+        rows.append({"time": (w + 0.5) * win,
+                     "theta_apparent": float(per_side.max()),
+                     "lo": float(np.percentile(grp["theta"], 10)),
+                     "hi": float(np.percentile(grp["theta"], 90)),
+                     "n": len(grp),
+                     "sides": len(per_side)})
+    return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
 
 
-# --------------------------------------------------------------------------- main
+def fit_lower_arc(cols, bot, Hs):
+    """Robust fit of y(x) = y0 + b*sqrt(1-((x-cx)/a)^2) to a lower boundary,
+    rejecting one-sided (hang-down) outliers. Returns (cx, y0, a, b)."""
+    from scipy.optimize import least_squares
 
-def main():
-    global vref_pts
-    ap = argparse.ArgumentParser(description="Volare fly-out angle (rope vs the ride's vertical).")
-    ap.add_argument("video")
-    ap.add_argument("--pick", action="store_true", help="mark the vertical support + checkpoint box")
-    ap.add_argument("--mark", action="store_true", help="manually click the rope each pass")
-    ap.add_argument("--watch", action="store_true", help="auto mode: show measurement live")
-    ap.add_argument("--vref", help="vertical support as x1,y1,x2,y2 (instead of --pick)")
-    ap.add_argument("--roi", help="checkpoint box x0,y0,x1,y1")
-    ap.add_argument("--eps", type=float, default=0.0, help="camera elevation (deg) de-projection")
-    ap.add_argument("--start", type=float), ap.add_argument("--end", type=float)
-    ap.add_argument("--step", type=int, default=1)
-    ap.add_argument("--smooth", type=int, default=5)
-    ap.add_argument("--speed", type=int, default=25, help="--watch playback ms/frame")
-    ap.add_argument("--display", type=int, default=1600, help="window width in px (bump up if too small)")
-    ap.add_argument("-o", "--out"), ap.add_argument("--outdir")
-    ap.add_argument("--show", action="store_true")
-    args = ap.parse_args()
+    def arc(p, x):
+        cx_, y0, a, b = p
+        u = np.clip((x - cx_) / max(a, 1.0), -0.999, 0.999)
+        return y0 + b * np.sqrt(1 - u * u)
+
+    span = cols[-1] - cols[0]
+    p0 = [cols.mean(), np.percentile(bot, 15), span / 2, max(4.0, np.ptp(bot) * 0.7)]
+    keep = np.ones(len(cols), bool)
+    fit = None
+    for _ in range(3):
+        fit = least_squares(lambda p: arc(p, cols[keep]) - bot[keep], p0,
+                            loss="soft_l1", f_scale=3.0,
+                            bounds=([cols[0], 0, span * 0.3, 1.0],
+                                    [cols[-1], Hs, span, Hs * 0.5]))
+        p0 = fit.x
+        resid = bot - arc(fit.x, cols)
+        mad = np.median(np.abs(resid[keep] - np.median(resid[keep]))) + 1e-6
+        keep = resid < 3.0 * mad
+        if keep.sum() < 30:
+            break
+    return fit.x
+
+
+def elevation_from_sweep(sweeps, df, args):
+    """Camera elevation from the swept chair ring, using PLATEAU windows only
+    (chairs hang lower during the ramp): the union of chair masks is the cone-base
+    annulus; its lower boundary is the ring's lower elliptical arc, whose axis
+    ratio is sin(elevation). The constant seat size only shifts the arc."""
+    if args.eps is not None:
+        return args.eps, "given"
+    top = np.percentile(df["theta_apparent"], 85)
+    keep_w = set((df.loc[df["theta_apparent"] >= top - 1.5, "time"] // args.win).astype(int))
+    sweep = None
+    for w, m in sweeps.items():
+        if w in keep_w:
+            sweep = m.copy() if sweep is None else (sweep | m)
+    if sweep is None:
+        return 0.0, "none"
+    ys, xs = np.where(sweep > 0)
+    if len(xs) < 500:
+        return 0.0, "none"
+    cols_all = np.arange(xs.min(), xs.max() + 1)
+    bot = np.full(len(cols_all), np.nan)
+    for i, x in enumerate(cols_all):
+        cy = ys[xs == x]
+        if len(cy):
+            bot[i] = cy.max()
+    ok = ~np.isnan(bot)
+    cols, bot = cols_all[ok].astype(float), bot[ok].astype(float)
+    if len(cols) < 60:
+        return 0.0, "none"
+    cx, y0, a, b = fit_lower_arc(cols, bot, sweep.shape[0])
+    arc_y = y0 + b * np.sqrt(1 - np.clip((cols - cx) / max(a, 1), -0.999, 0.999) ** 2)
+    r_arc = float(np.sqrt(np.mean((bot - arc_y) ** 2)))
+    line = np.polyval(np.polyfit(cols, bot, 1), cols)
+    r_line = float(np.sqrt(np.mean((bot - line) ** 2)))
+    # if a straight line explains the bottom as well as the arc, the ring's lower
+    # edge is probably hidden behind scenery and the elevation is unreliable
+    conf = "good" if r_line > 1.3 * r_arc else "low (ring bottom may be hidden)"
+    return float(np.degrees(np.arcsin(np.clip(b / max(a, 1), 0, 0.75)))), conf
+
+
+def finish(df, eps, args):
+    """Deproject the apparent angles and pull out the steady state."""
+    for c in ("theta_apparent", "lo", "hi"):
+        out = "theta" if c == "theta_apparent" else c
+        df[out] = [deproject(v, eps) for v in df[c]]
+    df["theta_ema"] = accel.ema(df["theta"].to_numpy(), 2 / (args.smooth + 1))
+    top = np.percentile(df["theta"], 90)             # robust: outliers cannot set it
+    plateau = df["theta"] >= top - 2.5
+    steady = float(df.loc[plateau, "theta"].mean())
+    steady_sd = float(df.loc[plateau, "theta"].std())
+    return df, steady, steady_sd, plateau
+
+
+def analyse(video, args):
+    import cv2
+    cap = cv2.VideoCapture(video)
+    if not cap.isOpened():
+        sys.exit(f"could not open {video}")
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    ntot = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    print(f"\n=== {os.path.basename(video)}  ({ntot} frames @ {fps:.1f} fps)")
+    cal = auto_calibrate(video, cap, fps, ntot, args)
+    print(f"Calib:   camera roll {cal['roll_deg']:+.2f} deg "
+          f"({cal['n_vert_lines']} vertical edges)")
+    meas, sweeps, annot = measure(cap, fps, ntot, cal, args, video)
+    cap.release()
+    if len(meas) < 10:
+        print("!! not enough rope measurements; skipping")
+        return None
+    df = aggregate(meas, args)
+    eps, eps_conf = elevation_from_sweep(sweeps, df, args)
+    df, steady, steady_sd, plateau = finish(df, eps, args)
+    print(f"Ring:    camera elevation {eps:.1f} deg, confidence {eps_conf}")
+    print(f"Measured: {len(meas)} ropes over {len(df)} windows")
+    print(f"Steady:  theta = {steady:.1f} +/- {steady_sd:.1f} deg   "
+          f"g tan = {G*np.tan(np.radians(steady)):.1f} m/s^2")
 
     if not args.show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    import cv2
-
-    if not os.path.exists(args.video):
-        sys.exit(f"Video not found: {args.video}")
-    cap = cv2.VideoCapture(args.video)
-    if not cap.isOpened():
-        sys.exit("could not open video")
-    fps = cap.get(cv2.CAP_PROP_FPS) or 60.0
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    if args.pick:
-        cal = calibrate(cap, args.video, args.eps, args.display)
-    elif args.vref and args.roi:
-        v = [float(x) for x in args.vref.split(",")]
-        cal = {"vref": [[v[0], v[1]], [v[2], v[3]]],
-               "roi": [int(x) for x in args.roi.split(",")], "eps_deg": args.eps}
-    elif os.path.exists(sidecar(args.video)):
-        cal = json.load(open(sidecar(args.video)))
-        if not args.eps:
-            args.eps = cal.get("eps_deg", 0.0)
-        print(f"(loaded calibration {os.path.basename(sidecar(args.video))})")
-    else:
-        sys.exit("No calibration. Run once with --pick, or pass --vref and --roi.")
-
-    vref_pts = [np.array(cal["vref"][0]), np.array(cal["vref"][1])]
-    vref = down(vref_pts[1] - vref_pts[0])
-    box = cal["roi"]; x0, y0, x1, y1 = box
-    f_lo = int((args.start or 0) * fps)
-    f_hi = int(args.end * fps) if args.end else total
-    roll = np.degrees(np.arctan2(vref[0], vref[1]))
-    print(f"Video:   {args.video}  {total} frames @ {fps:.1f}fps")
-    print(f"Vertical: support tilted {roll:+.1f}deg from image-vertical   box={box}  eps={args.eps:.0f}")
-
-    if args.mark:
-        t, a = run_mark(cap, fps, box, vref, args.eps, f_lo, f_hi, max(1, args.step), args.display)
-        cap.release()
-        if len(t) == 0:
-            sys.exit("no measurements taken")
-        pt, pa = t, a                               # each click is already one measurement
-    else:
-        if f_lo:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, f_lo)
-        times, angles = [], []
-        fi = f_lo - 1
-        quit_early = False
-        while not quit_early:
-            ok, frame = cap.read()
-            if not ok or fi >= f_hi:
-                break
-            fi += 1
-            if fi % args.step:
-                continue
-            res = rope_dir(frame[y0:y1, x0:x1])
-            ang = None
-            if res is not None:
-                d, frac, dark, c, apex = res
-                ang = angle_from_vertical(d, vref)
-                ang = deproject(ang, args.eps) if args.eps else ang
-                times.append(fi / fps); angles.append(ang)
-            if args.watch:
-                disp = frame.copy()
-                cv2.line(disp, tuple(map(int, vref_pts[0])), tuple(map(int, vref_pts[1])),
-                         (0, 0, 180), 1, cv2.LINE_AA)               # marked vertical (faint)
-                cv2.rectangle(disp, (x0, y0), (x1, y1), (0, 200, 0), 1)
-                if ang is not None:
-                    draw_gauge(disp, (x0 + apex[0], y0 + apex[1]), vref, d, ang)
-                banner(disp, [f"t={fi/fps:5.1f}s    angle {ang:.1f} deg" if ang is not None
-                              else f"t={fi/fps:5.1f}s    (no chair in box)", "q = quit"])
-                sc = args.display / disp.shape[1]
-                cv2.imshow("checkpoint", cv2.resize(disp, None, fx=sc, fy=sc))
-                if (cv2.waitKey(max(1, args.speed)) & 0xFF) == ord("q"):
-                    quit_early = True
-        cap.release()
-        if args.watch:
-            cv2.destroyAllWindows()
-        if not angles:
-            sys.exit("No rope detected in the box -- reposition it over sky where the chair swings.")
-        t = np.array(times); a = np.array(angles)
-        # per-pass peaks: a run of detections = one crossing; its max = side-on theta
-        pt, pa, i = [], [], 0
-        while i < len(t):
-            j = i
-            while j + 1 < len(t) and t[j + 1] - t[j] < 0.4:
-                j += 1
-            k = i + int(np.argmax(a[i:j + 1]))
-            pt.append(t[k]); pa.append(a[k]); i = j + 1
-        pt, pa = np.array(pt), np.array(pa)
-
-    pa_ema = accel.ema(pa, 2 / (args.smooth + 1)) if len(pa) > 1 else pa
-    hi = pa_ema >= np.nanpercentile(pa_ema, 60) if len(pa) > 2 else np.ones(len(pa), bool)
-    ss, sd = float(np.mean(pa[hi])), float(np.std(pa[hi]))
-    print(f"Measured: {len(pa)} angles   range {pa.min():.1f}..{pa.max():.1f} deg"
-          + ("  (de-projected)" if args.eps else "  (apparent; --eps to correct)"))
-    print(f"Steady:  fly-out ~ {ss:.1f} +/- {sd:.1f} deg  ->  g*tan = {G*np.tan(np.radians(ss)):.1f} m/s^2")
-
     fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True, constrained_layout=True)
-    a1.plot(pt, pa, "o-", color=accel.C_RAW, ms=4, lw=1.0, label="per pass")
-    if len(pa) > 1:
-        a1.plot(pt, pa_ema, color=accel.C_EMA, lw=2.0, label=f"EMA (N={args.smooth})")
-    a1.axhline(ss, color=accel.C_FIT, lw=1.2, ls="--", label=f"steady ~{ss:.1f}°")
-    a1.set_ylabel("fly-out angle θ  (deg)")
-    a1.legend(loc="lower right", fontsize=9)
+    a1.fill_between(df["time"], df["lo"], df["hi"], color="#f2c7c0", alpha=0.6,
+                    label="p10-p90 (wave)")
+    a1.plot(df["time"], df["theta"], ".", color=accel.C_RAW, ms=4, label="per window")
+    a1.plot(df["time"], df["theta_ema"], color=accel.C_EMA, lw=2, label="smoothed")
+    a1.axhline(steady, color=accel.C_FIT, lw=1.2, ls="--", label=f"steady {steady:.1f} deg")
+    a1.set_ylabel("fly-out angle theta (deg)")
+    a1.legend(loc="lower center", fontsize=9, ncols=4)
     accel.style_axis(a1)
-    a2.plot(pt, G * np.tan(np.radians(pa)), "o-", color=accel.C_FIT, ms=4, lw=1.0)
+    a2.plot(df["time"], G * np.tan(np.radians(df["theta_ema"])), color=accel.C_FIT, lw=1.6)
     a2.set_ylabel(r"$g\,\tan\theta$  (m/s$^2$)")
     a2.set_xlabel("time (s)")
     accel.style_axis(a2)
-    fig.suptitle("Volare fly-out angle (rope vs the ride's vertical)"
-                 + (f"  eps={args.eps:.0f}°" if args.eps else "  (apparent)"),
-                 fontsize=13, fontweight="bold")
-    png, csv = accel.out_paths_for(args.out, args.outdir, HERE, args.video, "_angle")
+    fig.suptitle(f"Fly-out angle, automatic: {os.path.basename(video)}   "
+                 f"(elevation-corrected {eps:.0f} deg)", fontsize=12, fontweight="bold")
+    png, csv = accel.out_paths_for(args.out, args.outdir, HERE, video,
+                                   f"_angle_{camera_tag(video)}")
     fig.savefig(png, dpi=150)
-    pd.DataFrame({"pass_time": pt, "theta_deg": pa, "theta_deg_ema": pa_ema,
-                  "g_tan_theta": G * np.tan(np.radians(pa))}).to_csv(csv, index=False)
+    plt.close(fig)
+    df.to_csv(csv, index=False)
     print(f"Graph:   {png}")
     print(f"Data:    {csv}")
-    if args.show:
-        plt.show()
+
+    if args.annot and annot:
+        mp4 = os.path.splitext(png)[0] + "_annot.mp4"
+        h, w = annot[0].shape[:2]
+        vw = cv2.VideoWriter(mp4, cv2.VideoWriter_fourcc(*"mp4v"), 12, (w, h))
+        for fr in annot:
+            vw.write(fr)
+        vw.release()
+        print(f"Check:   {mp4}")
+    return {"video": video, "df": df, "steady": steady, "steady_sd": steady_sd,
+            "eps": eps, "roll": cal["roll_deg"]}
+
+
+# ---------------------------------------------------------- accel comparison
+
+def accel_compare(res, accel_csv, args):
+    """Overlay video theta(t) with theta from the phone (linear acceleration)."""
+    import matplotlib.pyplot as plt
+    df = res["df"]
+    a = accel.load(accel_csv)
+    tcol = accel.find_time(a)
+    at_col = next((c for c in a.columns if c.strip().lower().startswith("at")), None)
+    if at_col is None:
+        return
+    ta = pd.to_numeric(a[tcol], errors="coerce").to_numpy()
+    at = pd.to_numeric(a[at_col], errors="coerce").to_numpy()
+    at_s = accel.ema(at, 2 / 301)
+    th_a = np.degrees(np.arctan(at_s / G))
+    # align by cross-correlating the two profiles on a common grid
+    grid = 0.5
+    tv = df["time"].to_numpy()
+    thv = np.nan_to_num(df["theta_ema"].to_numpy())
+    gv = np.arange(0, tv.max() + grid, grid)
+    sv = np.interp(gv, tv, thv, left=0, right=0)
+    ga = np.arange(ta.min(), ta.max(), grid)
+    sa = np.interp(ga, ta, np.nan_to_num(th_a))
+    sv_n = (sv - sv.mean()) / (sv.std() + 1e-9)
+    sa_n = (sa - sa.mean()) / (sa.std() + 1e-9)
+    corr = np.correlate(sa_n, sv_n, mode="full")
+    lag = (np.argmax(corr) - (len(sv_n) - 1)) * grid + ga[0]
+    fig, ax = plt.subplots(figsize=(11, 4.2), constrained_layout=True)
+    ax.plot(gv, sv, color=accel.C_EMA, lw=2, label="video theta(t)")
+    ax.plot(ga - lag, sa, color=accel.C_FIT, lw=1.5, label="phone arctan(aT/g)")
+    ax.set_xlim(0, gv.max())
+    ax.set_xlabel("time (s, video clock)")
+    ax.set_ylabel("theta (deg)")
+    ax.legend(fontsize=9)
+    accel.style_axis(ax)
+    base = os.path.splitext(os.path.basename(res["video"]))[0]
+    tag = camera_tag(res["video"])
+    fig.suptitle(f"Video ({tag}) vs accelerometer: {base}", fontsize=12, fontweight="bold")
+    out = os.path.join(args.outdir or os.path.join(HERE, "output"),
+                       f"{base}_vs_accel_{tag}.png")
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    hi = sa >= 0.8 * np.nanmax(sa)                   # the ride plateau, however
+    print(f"Accel:   steady theta from phone ~ {np.nanmean(sa[hi]):.1f} deg   "     # long the idle wait was
+          f"video {res['steady']:.1f} deg   ({os.path.basename(accel_csv)})")
+    print(f"Overlay: {out}")
+
+
+ACCEL_MAP = {"trial 1": "1st_Trial.csv", "trial 2": "2nd_Trial.csv"}
+
+
+def find_accel_csv(video):
+    name = os.path.basename(video).lower()
+    for key, csvf in ACCEL_MAP.items():
+        if key in name:
+            p = os.path.join(HERE, csvf)
+            if os.path.exists(p):
+                return p
+    return None
+
+
+# ------------------------------------------------------------------------ main
+
+def main():
+    ap = argparse.ArgumentParser(description="Automatic fly-out angle from ride video.")
+    ap.add_argument("video", nargs="?")
+    ap.add_argument("--all", action="store_true", help="run every video in Videos/")
+    ap.add_argument("--annot", action="store_true", help="write a verification video")
+    ap.add_argument("--debug", action="store_true", help="dump calibration overlay image")
+    ap.add_argument("--recal", action="store_true", help="ignore cached calibration")
+    ap.add_argument("--eps", type=float, help="override camera elevation (deg)")
+    ap.add_argument("--win", type=float, default=3.0, help="aggregation window (s)")
+    ap.add_argument("--step", type=int, help="process every K-th frame")
+    ap.add_argument("--start", type=float), ap.add_argument("--end", type=float)
+    ap.add_argument("--smooth", type=int, default=5)
+    ap.add_argument("-o", "--out"), ap.add_argument("--outdir")
+    ap.add_argument("--show", action="store_true")
+    args = ap.parse_args()
+
+    if args.all:
+        vids = sorted(glob.glob(os.path.join(HERE, "Videos", "*", "*.mp4"))
+                      + glob.glob(os.path.join(HERE, "Videos", "*", "*.MOV")))
+        if not vids:
+            sys.exit("no videos found under Videos/")
+        results = []
+        for v in vids:
+            r = analyse(v, args)
+            if r:
+                results.append(r)
+                acsv = find_accel_csv(v)
+                if acsv:
+                    accel_compare(r, acsv, args)
+        print("\n=== summary")
+        print(f"{'video':44s} {'steady':>8s} {'sd':>5s} {'g tan':>7s} {'eps':>5s}")
+        for r in results:
+            name = os.path.relpath(r["video"], os.path.join(HERE, "Videos"))
+            print(f"{name[:44]:44s} {r['steady']:7.1f} {r['steady_sd']:5.1f} "
+                  f"{G*np.tan(np.radians(r['steady'])):7.1f} {r['eps']:5.1f}")
+        rows = [{"video": os.path.relpath(r["video"], HERE), "steady_theta_deg": r["steady"],
+                 "sd": r["steady_sd"], "g_tan_theta": G * np.tan(np.radians(r["steady"])),
+                 "eps_deg": r["eps"], "roll_deg": r["roll"]} for r in results]
+        out = os.path.join(args.outdir or os.path.join(HERE, "output"), "flyout_summary.csv")
+        pd.DataFrame(rows).to_csv(out, index=False)
+        print(f"Summary: {out}")
+        return
+
+    if not args.video:
+        sys.exit("give a video path, or --all")
+    if not os.path.exists(args.video):
+        sys.exit(f"video not found: {args.video}")
+    r = analyse(args.video, args)
+    if r:
+        acsv = find_accel_csv(args.video)
+        if acsv:
+            accel_compare(r, acsv, args)
 
 
 if __name__ == "__main__":

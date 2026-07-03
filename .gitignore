@@ -7,6 +7,10 @@ __pycache__/
 Videos/
 *.MOV
 
-# per-video calibration sidecars
+# per-video calibration caches
 *.volare.json
+*.volare_masks.npz
 *.swing.json
+
+# verification videos are large; regenerate with --annot
+output/*_annot.mp4
