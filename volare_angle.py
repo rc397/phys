@@ -1,27 +1,15 @@
-# Fly-out angle of the chair-swing ride (Volare) from video, fully automatic.
+# Measures the fly-out angle of the Volare (chair swing ride) from video, no
+# clicking needed. The ride is a conical pendulum so tan(theta) = a/g, which is
+# what we compare against the phone accelerometer (arctan(aT/g), since phyphox
+# logs linear acceleration).
 #
-# Physics: conical pendulum, tan(theta) = a_horizontal / g. On video, a chain at
-# azimuth phi around the ride shows a foreshortened apparent angle, biggest for
-# the chairs seen side-on; the per-frame measurements therefore have a hard upper
-# edge, which deproject() converts to the true theta in closed form.
+# Rough idea: find the moving chairs with background subtraction, take the
+# outermost blob on each side (that chair is seen side-on so its chain shows the
+# steepest apparent angle), find the chain above its seat, then correct for the
+# camera looking up at the ride.
 #
-# Pipeline per video, no clicks:
-#   1. auto-calibrate: ride region from fast motion (blurred pair-differences so
-#      camera micro-wobble is ignored), true vertical from long building edges in
-#      the background (-> camera roll)
-#   2. sequential pass: moving chairs by background subtraction; per side the
-#      extreme blob is the side-on chair; from its seat, rays are scanned up and
-#      inward for the chain in the raw pixels - the winning ray must be covered
-#      continuously (crossing ropes fail), thin (the canopy fails) and agree with
-#      a robust line refit
-#   3. aggregate per time window (upper quantile per side, best side), estimate
-#      the camera elevation from the swept chair ring, deproject, steady state
-#
-#   python volare_angle.py "trial 1.MOV" --annot     # one video + check video
-#   python volare_angle.py --all                     # every video in Videos/
-#
-# Compare with the phone: the logs are linear acceleration, so at steady state
-# theta_accel = arctan(aT / g).
+#   python volare_angle.py "trial 1.MOV" --annot     writes a check video too
+#   python volare_angle.py --all                     every video in Videos/
 
 import argparse
 import glob
@@ -71,14 +59,12 @@ def angle_from_vertical(d, vref):
 
 
 def deproject(theta_deg, eps_deg):
-    """True fly-out angle from the MAXIMUM apparent chain angle over the chairs.
-
-    With the camera raised by eps, the steepest-looking chain is not the side-on
-    chair but one slightly on the near side, tilted toward the camera:
-        tan(theta'_max) = sin(theta) / sqrt(cos^2(theta)cos^2(eps) - sin^2(theta)sin^2(eps))
-    which inverts in closed form to
-        tan(theta) = T cos(eps) / sqrt(1 + T^2 sin^2(eps)),  T = tan(theta'_max).
-    At eps = 0 this reduces to theta = theta'."""
+    # true fly-out angle from the steepest apparent chain angle. With the camera
+    # raised by eps the steepest-looking chain is one slightly on the near side
+    # (tilted toward the camera), and working through the projection gives
+    #   tan(theta'_max) = sin(theta)/sqrt(cos^2(theta)cos^2(eps) - sin^2(theta)sin^2(eps))
+    # which inverts to tan(theta) = T cos(eps)/sqrt(1 + T^2 sin^2(eps)).
+    # At eps = 0 it reduces to theta = theta'.
     T = np.tan(np.radians(theta_deg))
     e = np.radians(eps_deg)
     return float(np.degrees(np.arctan(T * np.cos(e) / np.sqrt(1 + T * T * np.sin(e) ** 2))))
@@ -117,8 +103,6 @@ def draw_gauge(img, apex, vref, d, ang):
     cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 200, 255), 2, cv2.LINE_AA)
 
 
-# --------------------------------------------------------------------- stage 1
-
 def detect_vertical(bg_gray, exclude, min_len):
     # camera roll from long near-vertical background edges (building/pylon lines)
     import cv2
@@ -151,8 +135,8 @@ def detect_vertical(bg_gray, exclude, min_len):
 
 
 def auto_calibrate(video, cap, fps, ntot, args):
-    """Sample the video and derive: ride ROI, canopy mask, rim ellipse (elevation),
-    and the true vertical. Cached in a sidecar + npz unless --recal."""
+    # sample the video to find the ride region and the true vertical (camera
+    # roll). Cached next to the video so reruns skip this, unless --recal.
     import cv2
     if not args.recal and os.path.exists(sidecar(video)) and os.path.exists(masks_path(video)):
         with open(sidecar(video)) as fh:
@@ -243,14 +227,11 @@ def auto_calibrate(video, cap, fps, ntot, args):
     return cal
 
 
-# --------------------------------------------------------------------- stage 2
-
 def measure(cap, fps, ntot, cal, args, video):
-    """Sequential pass. Per frame and side, the extreme moving blob is the side-on
-    chair; seat+rider hang along the rope, so the blob's principal axis IS the rope
-    direction. A line refit on the raw pixels around that axis sharpens it.
-    Also logs every sizable blob centroid: at the plateau the chairs trace the cone
-    base, an ellipse whose axis ratio gives the camera elevation."""
+    # the main pass. For every frame, on each side, take the outermost moving
+    # blob (that chair is side-on) and search for its chain in the raw
+    # foreground pixels above the seat. Chair masks are also unioned per time
+    # window; elevation_from_sweep uses those later.
     import cv2
     roi = cal["roi"]
     Hs = roi.shape[0]
@@ -259,7 +240,6 @@ def measure(cap, fps, ntot, cal, args, video):
     rys, rxs = np.where(roi > 0)
     roi_w = rxs.max() - rxs.min() if len(rxs) else PROC_W
     roi_h = rys.max() - rys.min() if len(rys) else Hs
-    slab_w = max(16, int(0.07 * roi_w))
     a_min = max(35, int(2.2e-4 * roi_w * roi_h))
     kernel_open = np.ones((2, 2), np.uint8)
     kernel_join = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 7))
@@ -327,13 +307,13 @@ def measure(cap, fps, ntot, cal, args, video):
             bys, bxs = np.where(lab == li)
             by = bys.max()
             bot = np.array([float(np.mean(bxs[bys >= by - 3])), float(by)], np.float32)
-            # typical seat size this frame (median over blobs, so a blob that merged
-            # with the canopy cannot inflate it)
+            # typical seat height this frame; median over blobs so one blob that
+            # merged with the canopy can't inflate it
             hs_all = [stats[i, cv2.CC_STAT_HEIGHT] for i in range(1, nlab)
                       if stats[i, cv2.CC_STAT_AREA] >= a_min]
             h_seat = float(np.clip(np.median(hs_all), 8, 0.12 * roi_h))
-            # scan rays from the seat BOTTOM (the canopy is never below a chair),
-            # skipping the seat body, for the thin continuous chain in raw pixels
+            # scan rays from the seat bottom (the canopy is never below a chair),
+            # skipping past the seat body, looking for the chain in the raw pixels
             L_skip = 0.9 * h_seat
             L_ray = L_skip + 3.5 * h_seat
             sgn = 1.0 if side == "left" else -1.0     # chains rise toward the axis
@@ -354,14 +334,14 @@ def measure(cap, fps, ntot, cal, args, video):
                 on = in_range & (perp <= 3.5)
                 if on.sum() < 10:
                     continue
-                # a real chain fills the ray CONTINUOUSLY; ropes merely crossing the
-                # ray fill only the crossing points, so score by bin coverage
+                # a real chain fills the ray continuously; a rope that merely
+                # crosses it only fills the crossing point, so score by coverage
                 filled = len(np.unique(((proj[on] - L_skip) // 4).astype(int)))
                 cover = filled / n_bins
                 if cover < 0.55:
                     continue
-                # and a chain is THIN: rays through a dense 2-D region (the canopy)
-                # have far more pixels just outside the narrow band
+                # a chain is also thin: a ray through a dense region (the canopy)
+                # has far more pixels just outside the narrow band
                 wide = in_range & (perp <= 10.0)
                 if wide.sum() > 1.8 * on.sum():
                     continue
@@ -400,18 +380,16 @@ def measure(cap, fps, ntot, cal, args, video):
     return meas, sweeps, annot_frames
 
 
-# --------------------------------------------------------------------- stage 3
-
 def aggregate(meas, args):
-    """Window the raw measurements into apparent theta(t) with a band."""
+    # window the raw measurements into apparent theta(t) with a spread band
     m = pd.DataFrame(meas, columns=["t", "side", "theta", "agree"])
     win = args.win
     m["w"] = (m["t"] // win).astype(int)
     rows = []
     for w, grp in m.groupby("w"):
-        # the target is the UPPER edge of the per-frame distribution (the maximum
-        # apparent angle over the chairs, which deproject() inverts exactly);
-        # chairs at other azimuths and occluded sides only contaminate from below
+        # we want the upper edge of the per-frame distribution (the steepest
+        # apparent angle, which deproject() inverts); chairs at other azimuths
+        # and a side hidden behind scenery only ever drag readings down
         per_side = grp.groupby("side")["theta"].quantile(0.85)
         rows.append({"time": (w + 0.5) * win,
                      "theta_apparent": float(per_side.max()),
@@ -423,8 +401,8 @@ def aggregate(meas, args):
 
 
 def fit_lower_arc(cols, bot, Hs):
-    """Robust fit of y(x) = y0 + b*sqrt(1-((x-cx)/a)^2) to a lower boundary,
-    rejecting one-sided (hang-down) outliers. Returns (cx, y0, a, b)."""
+    # fit y(x) = y0 + b*sqrt(1-((x-cx)/a)^2) to a lower boundary, dropping
+    # outliers that hang below it. Returns (cx, y0, a, b).
     from scipy.optimize import least_squares
 
     def arc(p, x):
@@ -451,10 +429,10 @@ def fit_lower_arc(cols, bot, Hs):
 
 
 def elevation_from_sweep(sweeps, df, args):
-    """Camera elevation from the swept chair ring, using PLATEAU windows only
-    (chairs hang lower during the ramp): the union of chair masks is the cone-base
-    annulus; its lower boundary is the ring's lower elliptical arc, whose axis
-    ratio is sin(elevation). The constant seat size only shifts the arc."""
+    # camera elevation from the swept chair ring, using plateau windows only
+    # (chairs hang lower during the ramp). The union of chair masks is the ring
+    # the chairs sweep out, and its lower boundary is an ellipse arc whose axis
+    # ratio is sin(elevation). Seat size just shifts the arc, not its shape.
     if args.eps is not None:
         return args.eps, "given"
     top = np.percentile(df["theta_apparent"], 85)
@@ -490,7 +468,7 @@ def elevation_from_sweep(sweeps, df, args):
 
 
 def finish(df, eps, args):
-    """Deproject the apparent angles and pull out the steady state."""
+    # deproject the apparent angles and pull out the steady state
     for c in ("theta_apparent", "lo", "hi"):
         out = "theta" if c == "theta_apparent" else c
         df[out] = [deproject(v, eps) for v in df[c]]
@@ -564,10 +542,8 @@ def analyse(video, args):
             "eps": eps, "roll": cal["roll_deg"]}
 
 
-# ---------------------------------------------------------- accel comparison
-
 def accel_compare(res, accel_csv, args):
-    """Overlay video theta(t) with theta from the phone (linear acceleration)."""
+    # overlay the video theta(t) with the phone's arctan(aT/g)
     import matplotlib.pyplot as plt
     df = res["df"]
     a = accel.load(accel_csv)
@@ -606,8 +582,8 @@ def accel_compare(res, accel_csv, args):
                        f"{base}_vs_accel_{tag}.png")
     fig.savefig(out, dpi=150)
     plt.close(fig)
-    hi = sa >= 0.8 * np.nanmax(sa)                   # the ride plateau, however
-    print(f"Accel:   steady theta from phone ~ {np.nanmean(sa[hi]):.1f} deg   "     # long the idle wait was
+    hi = sa >= 0.8 * np.nanmax(sa)     # plateau only, however long the idle wait was
+    print(f"Accel:   steady theta from phone ~ {np.nanmean(sa[hi]):.1f} deg   "
           f"video {res['steady']:.1f} deg   ({os.path.basename(accel_csv)})")
     print(f"Overlay: {out}")
 
@@ -627,8 +603,6 @@ def find_accel_csv(video):
                 return p
     return None
 
-
-# ------------------------------------------------------------------------ main
 
 def main():
     ap = argparse.ArgumentParser(description="Automatic fly-out angle from ride video.")

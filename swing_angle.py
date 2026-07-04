@@ -20,7 +20,6 @@ G = 9.81  # m/s^2, for the g*sin(theta) tangential-acceleration prediction
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-
 def signed_angle(ref, vec):
     """Signed angle (radians) from ref to vec, both 2-vectors in image pixels.
     Positive = vec is counter-clockwise from ref in screen coords."""
@@ -51,7 +50,7 @@ def parse_xy(s):
 
 
 def map_point(x, y, rotate, scale, w0, h0):
-    """Map a point given in ORIGINAL-video pixels into the processed frame
+    """Map a point given in original-video pixels into the processed frame
     (same rotate-then-resize the frames go through). Verified against cv2.rotate."""
     if rotate == 90:                      # ROTATE_90_CLOCKWISE
         x, y = h0 - 1 - y, x
@@ -288,7 +287,6 @@ def track_manual(frames):
     return np.array(pts, float), np.ones(len(pts)), None
 
 
-
 def pick_seat(frame):
     """Drag a box round the seat to track; returns (cx, cy, half_side)."""
     import cv2
@@ -323,7 +321,6 @@ def pick_clicks(frame, labels):
             sys.exit("cancelled")
     cv2.destroyAllWindows()
     return picks
-
 
 
 def read_frames(path, rotate, resize_w, step, t0, t1):
@@ -386,7 +383,6 @@ def write_annotated(frames, pivot, ref, pts, ang_deg, valid, out_mp4):
     vw.release()
 
 
-
 def sidecar_path(video):
     return os.path.splitext(video)[0] + ".swing.json"
 
@@ -402,7 +398,6 @@ def load_labels(video):
 def save_labels(video, data):
     with open(sidecar_path(video), "w") as fh:
         json.dump(data, fh, indent=2)
-
 
 
 def main():

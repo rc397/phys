@@ -18,8 +18,6 @@ C_GRID = "#ededed"
 C_ZERO = "#b0b0b0"
 
 
-# --------------------------------------------------------------------------- IO
-
 def load(path):
     """Read a phyphox-style CSV, sniffing the delimiter and dropping comments."""
     df = pd.read_csv(path, sep=None, engine="python", comment="#", skip_blank_lines=True)
@@ -64,8 +62,6 @@ def time_axis(df, time_col):
     return np.arange(len(df), dtype=float), "sample"
 
 
-# --------------------------------------------------------------------- smoothing
-
 def ema(x, alpha):
     """Exponential moving average: y_t = a*x_t + (1-a)*y_(t-1), seeded with the
     first sample. NaNs hold the previous value instead of poisoning the run."""
@@ -108,8 +104,6 @@ def active_window(t, mag, pad=3.0, level=0.015, smooth_s=2.0, gap_s=10.0):
     lo_i, hi_i = edge(-1), edge(1)
     return max(t[0], t[lo_i] - pad), min(t[-1], t[hi_i] + pad)
 
-
-# --------------------------------------------------------------- CLI / arguments
 
 def add_common_args(ap):
     """Attach the smoothing / trimming / output flags shared by the EMA scripts."""
@@ -160,8 +154,6 @@ def out_paths(args, here, suffix):
     """(png, csv) for the EMA scripts, driven by args.out / args.outdir / args.file."""
     return out_paths_for(args.out, args.outdir, here, args.file, suffix)
 
-
-# ----------------------------------------------------------------------- styling
 
 def style_axis(ax):
     """Light grid + drop the top/right spines, the look used across the project."""
