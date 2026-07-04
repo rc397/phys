@@ -612,7 +612,10 @@ def accel_compare(res, accel_csv, args):
     print(f"Overlay: {out}")
 
 
-ACCEL_MAP = {"trial 1": "1st_Trial.csv", "trial 2": "2nd_Trial.csv"}
+ACCEL_MAP = {"trial 1": "Accelerometer data/1st Trial.csv",
+             "trial 2": "Accelerometer data/2nd Trial.csv",
+             "trial 3": "Accelerometer data/3rd Trial.csv",
+             "trial 4": "Accelerometer data/4th Trial.csv"}
 
 
 def find_accel_csv(video):
