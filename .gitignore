@@ -14,3 +14,7 @@ Videos/
 
 # verification videos are large; regenerate with --annot
 output/*_annot.mp4
+
+# other groups' data, kept local only
+miachen*
+output/miachen*
