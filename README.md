@@ -91,7 +91,7 @@ every measured chain, and `output/<video>_vs_accel.png` where phone data exists.
 | flag | meaning |
 |------|---------|
 | `--all` | run every video under `Videos/`, write `output/flyout_summary.csv` |
-| `--annot` | write the verification video (watch it before trusting numbers) |
+| `--annot` | write a full-length check video with the angle gauge drawn on (large file, kept local) |
 | `--debug` | dump calibration overlays + gate rejection counts |
 | `--eps E` | override the camera elevation (deg) |
 | `--win S` / `--step K` | aggregation window (default 3 s) / frame stride |

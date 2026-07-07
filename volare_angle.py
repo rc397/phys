@@ -227,7 +227,7 @@ def auto_calibrate(video, cap, fps, ntot, args):
     return cal
 
 
-def measure(cap, fps, ntot, cal, args, video):
+def measure(cap, fps, ntot, cal, args, video, annot_path=None):
     # the main pass. For every frame, on each side, take the outermost moving
     # blob (that chair is side-on) and search for its chain in the raw
     # foreground pixels above the seat. Chair masks are also unioned per time
@@ -256,9 +256,35 @@ def measure(cap, fps, ntot, cal, args, video):
 
     meas = []                                        # (t, side, theta_apparent, agree)
     sweeps = {}                                      # per-window unions of the chair mask
-    annot_frames = []
+    activity = []                                    # (t, moving px) for rest detection
     rej = {"few_px": 0, "few_side": 0, "no_chain": 0, "refit": 0, "range": 0, "kept": 0}
-    next_annot = -1e9
+
+    # the check video covers every processed frame, so it plays like the real ride
+    annot_vw = None
+    annot_count = 0
+
+    def annot_frame(img, got, t):
+        nonlocal annot_vw, annot_count
+        if not annot_path:
+            return
+        annot_count += 1
+        if annot_count % 2:                          # every 2nd frame keeps the size sane
+            return
+        d = img.copy()
+        for _side, top, dv, ang in got:
+            dvn = dv / (np.hypot(*dv) + 1e-9)
+            draw_gauge(d, top, vref, dvn, ang)
+        msg = f"t={t:6.1f}s"
+        if got:
+            msg += "   " + "  ".join(f"{g[3]:.1f} deg" for g in got)
+        banner(d, [msg])
+        d = cv2.resize(d, (960, int(round(Hs * 960 / PROC_W))))
+        if annot_vw is None:
+            fps_out = max(5.0, fps / step / 2)
+            annot_vw = cv2.VideoWriter(annot_path, cv2.VideoWriter_fourcc(*"mp4v"),
+                                       fps_out, (d.shape[1], d.shape[0]))
+        annot_vw.write(d)
+
     fi = start - 1
     while True:
         ok, frame = cap.read()
@@ -273,15 +299,17 @@ def measure(cap, fps, ntot, cal, args, video):
         fg = mog.apply(small)
         if fi < f_lo or fi < meas_from:
             continue
+        t = fi / fps
         raw = ((fg >= 200) & (roi > 0)).astype(np.uint8) * 255
         chair = cv2.morphologyEx(raw, cv2.MORPH_OPEN, kernel_open)
         chair = cv2.morphologyEx(chair, cv2.MORPH_CLOSE, kernel_join)
         n_ch = cv2.countNonZero(chair)
+        activity.append((t, n_ch))
         if n_ch < a_min:
             rej["few_px"] += 1
+            annot_frame(small, [], t)
             continue
         nlab, lab, stats, cent = cv2.connectedComponentsWithStats(chair, 8)
-        t = fi / fps
         w = int(t // args.win)
         if w not in sweeps:
             sweeps[w] = np.zeros((Hs, PROC_W), np.uint8)
@@ -367,36 +395,43 @@ def measure(cap, fps, ntot, cal, args, video):
             meas.append((t, side, ang, 1.0))
             gauge_at = pts[int(np.argmin(pts[:, 1]))]
             got.append((side, gauge_at, down(np.array([vx, vy])), ang))
-        if args.annot and got and t >= next_annot:
-            next_annot = t + 0.4
-            d = small.copy()
-            for side, top, dv, ang in got:
-                dvn = dv / (np.hypot(*dv) + 1e-9)
-                draw_gauge(d, top, vref, dvn, ang)
-            banner(d, [f"t={t:6.1f}s"])
-            annot_frames.append(d)
+        annot_frame(small, got, t)
+    if annot_vw is not None:
+        annot_vw.release()
     if args.debug:
         print("Gates:   " + "  ".join(f"{k}={v}" for k, v in rej.items()))
-    return meas, sweeps, annot_frames
+    return meas, sweeps, activity, a_min
 
 
-def aggregate(meas, args):
-    # window the raw measurements into apparent theta(t) with a spread band
+def aggregate(meas, activity, a_min, args):
+    # window the raw measurements into apparent theta(t) with a spread band.
+    # Windows where nothing on the ride moved are reported as at rest (theta 0),
+    # so the curve covers the whole video instead of skipping the idle waits.
     m = pd.DataFrame(meas, columns=["t", "side", "theta", "agree"])
+    act = pd.DataFrame(activity, columns=["t", "px"])
     win = args.win
     m["w"] = (m["t"] // win).astype(int)
+    act["w"] = (act["t"] // win).astype(int)
+    groups = dict(tuple(m.groupby("w")))
     rows = []
-    for w, grp in m.groupby("w"):
-        # we want the upper edge of the per-frame distribution (the steepest
-        # apparent angle, which deproject() inverts); chairs at other azimuths
-        # and a side hidden behind scenery only ever drag readings down
-        per_side = grp.groupby("side")["theta"].quantile(0.85)
-        rows.append({"time": (w + 0.5) * win,
-                     "theta_apparent": float(per_side.max()),
-                     "lo": float(np.percentile(grp["theta"], 10)),
-                     "hi": float(np.percentile(grp["theta"], 90)),
-                     "n": len(grp),
-                     "sides": len(per_side)})
+    for w, agrp in act.groupby("w"):
+        if w in groups:
+            grp = groups[w]
+            # we want the upper edge of the per-frame distribution (the steepest
+            # apparent angle, which deproject() inverts); chairs at other azimuths
+            # and a side hidden behind scenery only ever drag readings down
+            per_side = grp.groupby("side")["theta"].quantile(0.85)
+            rows.append({"time": (w + 0.5) * win,
+                         "theta_apparent": float(per_side.max()),
+                         "lo": float(np.percentile(grp["theta"], 10)),
+                         "hi": float(np.percentile(grp["theta"], 90)),
+                         "n": len(grp),
+                         "sides": len(per_side),
+                         "rest": 0})
+        elif float(agrp["px"].median()) < a_min:
+            rows.append({"time": (w + 0.5) * win, "theta_apparent": 0.0,
+                         "lo": 0.0, "hi": 0.0, "n": 0, "sides": 0, "rest": 1})
+        # moving but nothing measurable passed the gates: leave an honest gap
     return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
 
 
@@ -491,12 +526,15 @@ def analyse(video, args):
     cal = auto_calibrate(video, cap, fps, ntot, args)
     print(f"Calib:   camera roll {cal['roll_deg']:+.2f} deg "
           f"({cal['n_vert_lines']} vertical edges)")
-    meas, sweeps, annot = measure(cap, fps, ntot, cal, args, video)
+    png, csv = accel.out_paths_for(args.out, args.outdir, HERE, video,
+                                   f"_angle_{camera_tag(video)}")
+    annot_path = os.path.splitext(png)[0] + "_annot.mp4" if args.annot else None
+    meas, sweeps, activity, a_min = measure(cap, fps, ntot, cal, args, video, annot_path)
     cap.release()
     if len(meas) < 10:
         print("!! not enough rope measurements; skipping")
         return None
-    df = aggregate(meas, args)
+    df = aggregate(meas, activity, a_min, args)
     eps, eps_conf = elevation_from_sweep(sweeps, df, args)
     df, steady, steady_sd, plateau = finish(df, eps, args)
     print(f"Ring:    camera elevation {eps:.1f} deg, confidence {eps_conf}")
@@ -522,22 +560,13 @@ def analyse(video, args):
     accel.style_axis(a2)
     fig.suptitle(f"Fly-out angle, automatic: {os.path.basename(video)}   "
                  f"(elevation-corrected {eps:.0f} deg)", fontsize=12, fontweight="bold")
-    png, csv = accel.out_paths_for(args.out, args.outdir, HERE, video,
-                                   f"_angle_{camera_tag(video)}")
     fig.savefig(png, dpi=150)
     plt.close(fig)
     df.to_csv(csv, index=False)
     print(f"Graph:   {png}")
     print(f"Data:    {csv}")
-
-    if args.annot and annot:
-        mp4 = os.path.splitext(png)[0] + "_annot.mp4"
-        h, w = annot[0].shape[:2]
-        vw = cv2.VideoWriter(mp4, cv2.VideoWriter_fourcc(*"mp4v"), 12, (w, h))
-        for fr in annot:
-            vw.write(fr)
-        vw.release()
-        print(f"Check:   {mp4}")
+    if annot_path and os.path.exists(annot_path):
+        print(f"Check:   {annot_path}  (full-length, plays like the ride)")
     return {"video": video, "df": df, "steady": steady, "steady_sd": steady_sd,
             "eps": eps, "roll": cal["roll_deg"]}
 
