@@ -78,29 +78,32 @@ def banner(img, lines):
                     (0, 255, 255) if i == 0 else (230, 230, 230), 2, cv2.LINE_AA)
 
 
-def draw_gauge(img, apex, vref, d, ang):
-    # vertical ray + rope ray + filled wedge + the angle value
+def draw_gauge(img, apex, vref, d, ang, dim=False):
+    # vertical ray + rope ray + filled wedge + the angle value; dim = a held
+    # reading being coasted between verified frames
     import cv2
+    wedge = (140, 160, 170) if dim else (60, 200, 255)
+    rope = (120, 130, 140) if dim else (40, 150, 255)
     ap = (int(apex[0]), int(apex[1]))
     Lv, Lr, R = 110, 95, 55
     av = np.degrees(np.arctan2(vref[1], vref[0]))
     ad = np.degrees(np.arctan2(d[1], d[0]))
     a0, a1 = (av, ad) if (ad - av) % 360 <= 180 else (ad, av)
     ov = img.copy()
-    cv2.ellipse(ov, ap, (R, R), 0, a0, a1, (60, 200, 255), -1)
-    cv2.addWeighted(ov, 0.40, img, 0.60, 0, img)
-    cv2.ellipse(img, ap, (R, R), 0, a0, a1, (60, 200, 255), 2, cv2.LINE_AA)
+    cv2.ellipse(ov, ap, (R, R), 0, a0, a1, wedge, -1)
+    cv2.addWeighted(ov, 0.25 if dim else 0.40, img, 0.75 if dim else 0.60, 0, img)
+    cv2.ellipse(img, ap, (R, R), 0, a0, a1, wedge, 2, cv2.LINE_AA)
     ve = (int(ap[0] + vref[0] * Lv), int(ap[1] + vref[1] * Lv))
     re = (int(ap[0] + d[0] * Lr), int(ap[1] + d[1] * Lr))
     cv2.line(img, ap, ve, (255, 255, 255), 2, cv2.LINE_AA)
-    cv2.line(img, ap, re, (40, 150, 255), 3, cv2.LINE_AA)
-    cv2.circle(img, ap, 5, (40, 150, 255), -1, cv2.LINE_AA)
+    cv2.line(img, ap, re, rope, 3, cv2.LINE_AA)
+    cv2.circle(img, ap, 5, rope, -1, cv2.LINE_AA)
     mid = down(vref) + down(d)
     n = np.hypot(*mid)
     mid = mid / n if n else np.array([0, 1.0])
     lp = (int(ap[0] + mid[0] * (R + 14)), int(ap[1] + mid[1] * (R + 14)) + 6)
     cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv2.LINE_AA)
-    cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 0.8, (60, 200, 255), 2, cv2.LINE_AA)
+    cv2.putText(img, f"{ang:.1f}", lp, cv2.FONT_HERSHEY_SIMPLEX, 0.8, wedge, 2, cv2.LINE_AA)
 
 
 def detect_vertical(bg_gray, exclude, min_len):
@@ -257,13 +260,18 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
     meas = []                                        # (t, side, theta_apparent, agree)
     sweeps = {}                                      # per-window unions of the chair mask
     activity = []                                    # (t, moving px) for rest detection
-    rej = {"few_px": 0, "few_side": 0, "no_chain": 0, "refit": 0, "range": 0, "kept": 0}
+    rej = {"few_px": 0, "few_side": 0, "no_chain": 0, "refit": 0, "range": 0,
+           "kept": 0, "held": 0}
+    # once a chain is found, keep re-fitting that same chain on later frames
+    # rather than demanding a fresh find every time; a lock lives ~2 s
+    lock = {"left": None, "right": None}
+    max_hold = max(3, int(round(2.0 * fps / step)))
 
     # the check video covers every processed frame, so it plays like the real ride
     annot_vw = None
     annot_count = 0
 
-    def annot_frame(img, got, t):
+    def annot_frame(img, got, t, note=""):
         nonlocal annot_vw, annot_count
         if not annot_path:
             return
@@ -271,12 +279,15 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         if annot_count % 2:                          # every 2nd frame keeps the size sane
             return
         d = img.copy()
-        for _side, top, dv, ang in got:
+        for _side, top, dv, ang, stale in got:
             dvn = dv / (np.hypot(*dv) + 1e-9)
-            draw_gauge(d, top, vref, dvn, ang)
+            draw_gauge(d, top, vref, dvn, ang, dim=stale)
         msg = f"t={t:6.1f}s"
         if got:
-            msg += "   " + "  ".join(f"{g[3]:.1f} deg" for g in got)
+            parts = [f"{g[3]:.1f} deg" + (" (holding)" if g[4] else "") for g in got]
+            msg += "   " + "  ".join(parts)
+        elif note:
+            msg += f"   {note}"
         banner(d, [msg])
         d = cv2.resize(d, (960, int(round(Hs * 960 / PROC_W))))
         if annot_vw is None:
@@ -307,7 +318,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         activity.append((t, n_ch))
         if n_ch < a_min:
             rej["few_px"] += 1
-            annot_frame(small, [], t)
+            annot_frame(small, [], t, "at rest")
             continue
         nlab, lab, stats, cent = cv2.connectedComponentsWithStats(chair, 8)
         w = int(t // args.win)
@@ -317,21 +328,9 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         # raw pixels for the chain search
         rys_, rxs_ = np.where(raw > 0)
         p_r = np.column_stack([rxs_, rys_]).astype(np.float32)
-        got = []
-        for side in ("left", "right"):
-            # the frame's own extreme blob on this side, not clipped by the border
-            side_ok = [li for li in range(1, nlab)
-                       if stats[li, cv2.CC_STAT_AREA] >= a_min
-                       and (cent[li][0] < axis_x if side == "left" else cent[li][0] > axis_x)
-                       and stats[li, cv2.CC_STAT_LEFT] > 2
-                       and stats[li, cv2.CC_STAT_LEFT] + stats[li, cv2.CC_STAT_WIDTH] < PROC_W - 2]
-            if not side_ok:
-                rej["few_side"] += 1
-                continue
-            if side == "left":
-                li = min(side_ok, key=lambda i: stats[i, cv2.CC_STAT_LEFT])
-            else:
-                li = max(side_ok, key=lambda i: stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH])
+
+        def scan_blob(li, sgn):
+            # scan for this blob's chain in the raw pixels above its seat
             bys, bxs = np.where(lab == li)
             by = bys.max()
             bot = np.array([float(np.mean(bxs[bys >= by - 3])), float(by)], np.float32)
@@ -340,17 +339,15 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
             hs_all = [stats[i, cv2.CC_STAT_HEIGHT] for i in range(1, nlab)
                       if stats[i, cv2.CC_STAT_AREA] >= a_min]
             h_seat = float(np.clip(np.median(hs_all), 8, 0.12 * roi_h))
-            # scan rays from the seat bottom (the canopy is never below a chair),
-            # skipping past the seat body, looking for the chain in the raw pixels
+            # rays leave from the seat bottom (the canopy is never below a chair),
+            # skipping past the seat body
             L_skip = 0.9 * h_seat
             L_ray = L_skip + 3.5 * h_seat
-            sgn = 1.0 if side == "left" else -1.0     # chains rise toward the axis
             nb = ((np.abs(p_r[:, 0] - bot[0]) <= L_ray + 10)
                   & (p_r[:, 1] <= bot[1] + 2) & (p_r[:, 1] >= bot[1] - L_ray - 10))
             q = p_r[nb] - bot
             if len(q) < 12:
-                rej["no_chain"] += 1
-                continue
+                return None
             n_bins = max(4, int((L_ray - L_skip) // 4))
             best = None
             for adeg in range(3, 66, 2):
@@ -376,8 +373,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
                 if best is None or cover > best[0]:
                     best = (cover, adeg, on)
             if best is None:
-                rej["no_chain"] += 1
-                continue
+                return None
             _, adeg, on = best
             pts = q[on] + bot
             vx, vy, x0, y0 = cv2.fitLine(pts, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
@@ -385,17 +381,99 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
             resid = float(np.mean(np.abs((pts - [x0, y0]) @ nline)))
             ang = angle_from_vertical(np.array([vx, vy]), vref)
             # scan and refit must agree, and the support must look like a line
-            if resid > 2.5 or abs(ang - adeg) > 5.0:
-                rej["refit"] += 1
+            if resid > 2.5 or abs(ang - adeg) > 5.0 or not (3.0 <= ang <= 65.0):
+                return None
+            return ang, pts, np.array([vx, vy], np.float32), np.array([x0, y0], np.float32)
+
+        def try_fresh(side):
+            # the extreme chair is the side-on one, but its chain sometimes runs in
+            # front of the canopy where nothing passes the gates - so try the few
+            # outermost chairs (barely less side-on) and keep the steepest result
+            side_ok = [li for li in range(1, nlab)
+                       if stats[li, cv2.CC_STAT_AREA] >= a_min
+                       and (cent[li][0] < axis_x if side == "left" else cent[li][0] > axis_x)
+                       and stats[li, cv2.CC_STAT_LEFT] > 2
+                       and stats[li, cv2.CC_STAT_LEFT] + stats[li, cv2.CC_STAT_WIDTH] < PROC_W - 2]
+            if not side_ok:
+                rej["few_side"] += 1
+                return None
+            if side == "left":
+                cands = sorted(side_ok, key=lambda i: stats[i, cv2.CC_STAT_LEFT])[:3]
+                sgn = 1.0                             # chains rise toward the axis
+            else:
+                cands = sorted(side_ok, key=lambda i: -(stats[i, cv2.CC_STAT_LEFT]
+                                                        + stats[i, cv2.CC_STAT_WIDTH]))[:3]
+                sgn = -1.0
+            results = [r for r in (scan_blob(li, sgn) for li in cands) if r]
+            if not results:
+                rej["no_chain"] += 1
+                return None
+            return max(results, key=lambda r: r[0])
+
+        def try_relock(side, st):
+            # the chain found moments ago is still there: re-fit the raw pixels
+            # around its last known line instead of demanding a fresh find
+            dvec, a0 = st["dvec"], st["pt"]
+            ylo, yhi = st["ylo"] - 12, st["yhi"] + 12
+            pts = None
+            for tol in (6.0, 3.5):
+                nvec = np.array([-dvec[1], dvec[0]], np.float32)
+                dist = np.abs((p_r - a0) @ nvec)
+                near = (dist <= tol) & (p_r[:, 1] >= ylo) & (p_r[:, 1] <= yhi)
+                if near.sum() < 15:
+                    return None
+                pts = p_r[near]
+                vx, vy, x0, y0 = cv2.fitLine(pts, cv2.DIST_HUBER, 0, 0.01, 0.01).ravel()
+                dvec = np.array([vx, vy], np.float32)
+                a0 = np.array([x0, y0], np.float32)
+            nline = np.array([-dvec[1], dvec[0]])
+            resid = float(np.mean(np.abs((pts - a0) @ nline)))
+            ang = angle_from_vertical(dvec, vref)
+            yspan = float(pts[:, 1].max() - pts[:, 1].min())
+            if (resid > 2.5 or abs(ang - st["ang"]) > 8.0
+                    or yspan < max(15.0, 0.4 * (st["yhi"] - st["ylo"]))
+                    or not (3.0 <= ang <= 65.0)):
+                return None
+            # same structural gates as a fresh find, so a lock cannot survive on
+            # a dense region or a few scattered pixels
+            in_y = (p_r[:, 1] >= ylo) & (p_r[:, 1] <= yhi)
+            dist = np.abs((p_r - a0) @ nline)
+            on = in_y & (dist <= 3.5)
+            wide = in_y & (dist <= 10.0)
+            if wide.sum() > 1.8 * on.sum():
+                return None
+            proj = (pts - a0) @ dvec
+            filled = len(np.unique((proj // 4).astype(int)))
+            if filled < 0.5 * max(4, int(yspan // 4)):
+                return None
+            return ang, pts, dvec, a0
+
+        got = []
+        for side in ("left", "right"):
+            st = lock[side]
+            if st is not None:
+                st["age"] += 1
+                if st["age"] > max_hold:
+                    lock[side] = st = None
+            m = try_fresh(side)
+            held = False
+            if m is None and st is not None:
+                m = try_relock(side, st)
+                held = m is not None
+            if m is None:
+                if st is not None:
+                    # could not re-verify this frame; show the last reading dimmed
+                    got.append((side, st["top"], down(st["dvec"]), st["ang"], True))
                 continue
-            if not (3.0 <= ang <= 65.0):
-                rej["range"] += 1
-                continue
-            rej["kept"] += 1
-            meas.append((t, side, ang, 1.0))
+            ang, pts, dvec, a0 = m
+            rej["held" if held else "kept"] += 1
             gauge_at = pts[int(np.argmin(pts[:, 1]))]
-            got.append((side, gauge_at, down(np.array([vx, vy])), ang))
-        annot_frame(small, got, t)
+            lock[side] = {"pt": a0, "dvec": dvec, "ang": ang, "top": gauge_at,
+                          "ylo": float(pts[:, 1].min()), "yhi": float(pts[:, 1].max()),
+                          "age": st["age"] if held else 0}
+            meas.append((t, side, ang, 0.7 if held else 1.0))
+            got.append((side, gauge_at, down(dvec), ang, False))
+        annot_frame(small, got, t, "" if got else "no lock")
     if annot_vw is not None:
         annot_vw.release()
     if args.debug:
@@ -417,6 +495,11 @@ def aggregate(meas, activity, a_min, args):
     for w, agrp in act.groupby("w"):
         if w in groups:
             grp = groups[w]
+            # the statistics use only fresh, fully-gated finds; held re-locks are
+            # for continuity in the check video, not for the numbers
+            fresh = grp[grp["agree"] >= 0.99]
+            if len(fresh) >= 5:
+                grp = fresh
             # we want the upper edge of the per-frame distribution (the steepest
             # apparent angle, which deproject() inverts); chairs at other azimuths
             # and a side hidden behind scenery only ever drag readings down
