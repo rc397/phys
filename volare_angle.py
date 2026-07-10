@@ -266,10 +266,13 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
     # rather than demanding a fresh find every time; a lock lives ~2 s
     lock = {"left": None, "right": None}
     max_hold = max(3, int(round(2.0 * fps / step)))
-    from collections import deque
-    past = deque(maxlen=max(1, int(round(0.3 * fps / step))))   # masks ~0.3 s back
     rot_streak = 0                                   # rotation must persist to count
     streak_min = max(3, int(round(0.7 * fps / step)))
+    # short-baseline frame difference: riding displaces fully in 0.2 s, while a
+    # cloud-driven lighting change (which floods the background subtractor) barely
+    # registers over that gap, and canopy flutter registers only weakly
+    from collections import deque
+    gdeq = deque(maxlen=max(1, int(round(0.2 * fps / step))))
 
     # the check video covers every processed frame, so it plays like the real ride
     annot_vw = None
@@ -312,6 +315,12 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
             continue
         small = cv2.resize(frame, (PROC_W, Hs))
         fg = mog.apply(small)
+        gb = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
+        fast_mass = 0
+        if len(gdeq) == gdeq.maxlen:
+            fast = (cv2.absdiff(gb, gdeq[0]) > 18) & (roi > 0)
+            fast_mass = int(np.count_nonzero(fast))
+        gdeq.append(gb)
         if fi < f_lo or fi < meas_from:
             continue
         t = fi / fps
@@ -321,15 +330,14 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         n_ch = cv2.countNonZero(chair)
         if n_ch < a_min:
             rej["few_px"] += 1
-            activity.append((t, n_ch, 0))
-            past.append(chair)
+            activity.append((t, fast_mass, 0))
             annot_frame(small, [], t, "at rest")
             continue
         nlab, lab, stats, cent = cv2.connectedComponentsWithStats(chair, 8)
-        # only a ROTATING ride is measurable. A parked canopy fluttering in the
-        # breeze (whose tent seams look exactly like chains) still shows moving
-        # pixels, but flutter oscillates IN PLACE: rotation displaces the chairs
-        # completely within a third of a second, so the mask overlap collapses
+        # measuring needs ride-wide motion that persists ~0.7 s (a parked canopy
+        # fluttering in a gust is local and brief); the final flutter-vs-riding
+        # call is made per window in aggregate(), against this video's own
+        # motion level, because flutter moves far fewer pixels than riding
         big = [i for i in range(1, nlab) if stats[i, cv2.CC_STAT_AREA] >= a_min]
         if big:
             xspread = (max(stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH]
@@ -337,18 +345,10 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
                        - min(stats[i, cv2.CC_STAT_LEFT] for i in big)) / max(roi_w, 1)
         else:
             xspread = 0.0
-        iou = 1.0
-        if len(past) == past.maxlen:
-            prev = past[0]
-            inter = cv2.countNonZero(chair & prev)
-            union = cv2.countNonZero(chair | prev)
-            iou = inter / union if union else 1.0
-        past.append(chair)
-        # a gust can fake one coherent-looking frame, but real rotation persists
         rot_streak = rot_streak + 1 if (len(big) >= 4 and xspread >= 0.45
-                                        and iou <= 0.35) else 0
+                                        and fast_mass >= 4 * a_min) else 0
         rotating = rot_streak >= streak_min
-        activity.append((t, n_ch, 1 if rotating else 0))
+        activity.append((t, fast_mass, 1 if rotating else 0))
         if not rotating:
             rej["still"] += 1
             annot_frame(small, [], t, "at rest")
@@ -510,10 +510,11 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         annot_vw.release()
     if args.debug:
         print("Gates:   " + "  ".join(f"{k}={v}" for k, v in rej.items()))
-    return meas, sweeps, activity, a_min
+    sweep_area = {w: int(cv2.countNonZero(mk)) for w, mk in sweeps.items()}
+    return meas, sweeps, sweep_area, activity, a_min
 
 
-def aggregate(meas, activity, a_min, args):
+def aggregate(meas, sweep_area, activity, a_min, args):
     # window the raw measurements into apparent theta(t) with a spread band.
     # Windows where nothing on the ride moved are reported as at rest (theta 0),
     # so the curve covers the whole video instead of skipping the idle waits.
@@ -523,9 +524,21 @@ def aggregate(meas, activity, a_min, args):
     m["w"] = (m["t"] // win).astype(int)
     act["w"] = (act["t"] // win).astype(int)
     groups = dict(tuple(m.groupby("w")))
+    # genuine riding both moves an order of magnitude more pixels than a parked
+    # canopy fluttering in the breeze, and sweeps out the whole ride annulus
+    # (boarding crowds move plenty of pixels but only paint a small strip).
+    # Judge each window against this video's own riding levels; windows that
+    # fail become rest even if the tent seams produced chain-like readings.
+    med_px = act.groupby("w")["px"].median()
+    px_floor = 0.10 * np.percentile(med_px, 95)
+    areas = pd.Series(sweep_area)
+    area_floor = 0.12 * np.percentile(areas, 95) if len(areas) else 0.0
     rows = []
     for w, agrp in act.groupby("w"):
-        if w in groups:
+        if float(med_px[w]) < px_floor or sweep_area.get(w, 0) < area_floor:
+            rows.append({"time": (w + 0.5) * win, "theta_apparent": 0.0,
+                         "lo": 0.0, "hi": 0.0, "n": 0, "sides": 0, "rest": 1})
+        elif w in groups:
             grp = groups[w]
             # the statistics use only fresh, fully-gated finds; held re-locks are
             # for continuity in the check video, not for the numbers
@@ -645,12 +658,12 @@ def analyse(video, args):
     png, csv = accel.out_paths_for(args.out, args.outdir, HERE, video,
                                    f"_angle_{camera_tag(video)}")
     annot_path = os.path.splitext(png)[0] + "_annot.mp4" if args.annot else None
-    meas, sweeps, activity, a_min = measure(cap, fps, ntot, cal, args, video, annot_path)
+    meas, sweeps, sweep_area, activity, a_min = measure(cap, fps, ntot, cal, args, video, annot_path)
     cap.release()
     if len(meas) < 10:
         print("!! not enough rope measurements; skipping")
         return None
-    df = aggregate(meas, activity, a_min, args)
+    df = aggregate(meas, sweep_area, activity, a_min, args)
     eps, eps_conf = elevation_from_sweep(sweeps, df, args)
     df, steady, steady_sd, plateau = finish(df, eps, args)
     print(f"Ring:    camera elevation {eps:.1f} deg, confidence {eps_conf}")
