@@ -39,6 +39,9 @@ for trial in (1, 2, 3, 4):
     ta = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()
     at = pd.to_numeric(a[a.columns[4]], errors="coerce").to_numpy()
     at_s = accel.ema(at, 2 / 151)                    # ~1.5 s smoothing at 100 Hz
+    # the rider feels the rotor-tilt wave (a stable ~5-6 s oscillation); average
+    # over it for the line the video should be compared against
+    at_w = pd.Series(at_s).rolling(801, center=True, min_periods=100).mean().to_numpy()
 
     # put the phone on the video clock via the two angle profiles
     grid = 0.5
@@ -59,8 +62,11 @@ for trial in (1, 2, 3, 4):
     ax1.plot(v["time"], v["theta"], ".", color=accel.C_RAW, ms=3.5, label="video, per window")
     ax1.plot(v["time"], v["theta_ema"], color=accel.C_EMA, lw=2, label="video, smoothed")
     th_p = np.degrees(np.arctan(at_s / G))
-    ax1.plot(tp[keep], th_p[keep], color=accel.C_FIT, lw=1.6,
+    th_w = np.degrees(np.arctan(at_w / G))
+    ax1.plot(tp[keep], th_p[keep], color=accel.C_FIT, lw=1.0, alpha=0.55,
              label="phone  arctan(aT/g)")
+    ax1.plot(tp[keep], th_w[keep], color="#123f8f", lw=2.2,
+             label="phone, wave-averaged")
     # the ride also spins while empty / loading; the phone in the queue sees
     # nothing then, so mark those spans rather than let them read as error
     ph_on_grid = np.interp(v["time"], tp[keep], th_p[keep], left=0, right=0)
@@ -82,7 +88,9 @@ for trial in (1, 2, 3, 4):
     accel.style_axis(ax1)
 
     ax2.plot(tp[keep], at[keep], color=accel.C_RAW, lw=0.6, alpha=0.5, label="raw")
-    ax2.plot(tp[keep], at_s[keep], color=accel.C_FIT, lw=2, label="smoothed")
+    ax2.plot(tp[keep], at_s[keep], color=accel.C_FIT, lw=1.2, alpha=0.7,
+             label="smoothed (the wave)")
+    ax2.plot(tp[keep], at_w[keep], color="#123f8f", lw=2.2, label="wave-averaged")
     ax2.set_ylabel("acceleration aT  (m/s$^2$)")
     ax2.set_xlabel("time (s)")
     ax2.set_xlim(0, v["time"].max())
