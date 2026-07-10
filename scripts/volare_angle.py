@@ -25,6 +25,7 @@ import accel
 
 G = 9.81
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)                     # the repo root, one up from scripts/
 PROC_W = 1280         # all mask work happens at this width (thin chains need it)
 
 
@@ -220,7 +221,7 @@ def auto_calibrate(video, cap, fps, ntot, args):
         cv2.line(dbg, (int(cal["axis_x"]), 0), (int(cal["axis_x"]), Hs), (0, 255, 255), 1)
         x0 = int(PROC_W / 2)
         cv2.line(dbg, (x0, 0), (int(x0 + vref[0] * Hs), int(vref[1] * Hs)), (255, 255, 0), 1)
-        d = args.outdir or os.path.join(HERE, "output")
+        d = args.outdir or os.path.join(ROOT, "output")
         os.makedirs(d, exist_ok=True)
         base = os.path.splitext(os.path.basename(video))[0]
         cv2.imwrite(os.path.join(d, base + "_debug_cal.png"), dbg)
@@ -655,7 +656,8 @@ def analyse(video, args):
     cal = auto_calibrate(video, cap, fps, ntot, args)
     print(f"Calib:   camera roll {cal['roll_deg']:+.2f} deg "
           f"({cal['n_vert_lines']} vertical edges)")
-    png, csv = accel.out_paths_for(args.out, args.outdir, HERE, video,
+    png, csv = accel.out_paths_for(args.out, args.outdir
+                                   or os.path.join(ROOT, "output", "angles"), ROOT, video,
                                    f"_angle_{camera_tag(video)}")
     annot_path = os.path.splitext(png)[0] + "_annot.mp4" if args.annot else None
     meas, sweeps, sweep_area, activity, a_min = measure(cap, fps, ntot, cal, args, video, annot_path)
@@ -736,7 +738,7 @@ def accel_compare(res, accel_csv, args):
     base = os.path.splitext(os.path.basename(res["video"]))[0]
     tag = camera_tag(res["video"])
     fig.suptitle(f"Video ({tag}) vs accelerometer: {base}", fontsize=12, fontweight="bold")
-    out = os.path.join(args.outdir or os.path.join(HERE, "output"),
+    out = os.path.join(args.outdir or os.path.join(ROOT, "output", "accel"),
                        f"{base}_vs_accel_{tag}.png")
     fig.savefig(out, dpi=150)
     plt.close(fig)
@@ -746,17 +748,15 @@ def accel_compare(res, accel_csv, args):
     print(f"Overlay: {out}")
 
 
-ACCEL_MAP = {"trial 1": "Accelerometer data/1st Trial.csv",
-             "trial 2": "Accelerometer data/2nd Trial.csv",
-             "trial 3": "Accelerometer data/3rd Trial.csv",
-             "trial 4": "Accelerometer data/4th Trial.csv"}
+ACCEL_MAP = {"trial 1": "data/1st Trial.csv", "trial 2": "data/2nd Trial.csv",
+             "trial 3": "data/3rd Trial.csv", "trial 4": "data/4th Trial.csv"}
 
 
 def find_accel_csv(video):
     name = os.path.basename(video).lower()
     for key, csvf in ACCEL_MAP.items():
         if key in name:
-            p = os.path.join(HERE, csvf)
+            p = os.path.join(ROOT, csvf)
             if os.path.exists(p):
                 return p
     return None
@@ -779,8 +779,8 @@ def main():
     args = ap.parse_args()
 
     if args.all:
-        vids = sorted(glob.glob(os.path.join(HERE, "Videos", "*", "*.mp4"))
-                      + glob.glob(os.path.join(HERE, "Videos", "*", "*.MOV")))
+        vids = sorted(glob.glob(os.path.join(ROOT, "Videos", "*", "*.mp4"))
+                      + glob.glob(os.path.join(ROOT, "Videos", "*", "*.MOV")))
         if not vids:
             sys.exit("no videos found under Videos/")
         results = []
@@ -794,13 +794,13 @@ def main():
         print("\n=== summary")
         print(f"{'video':44s} {'steady':>8s} {'sd':>5s} {'g tan':>7s} {'eps':>5s}")
         for r in results:
-            name = os.path.relpath(r["video"], os.path.join(HERE, "Videos"))
+            name = os.path.relpath(r["video"], os.path.join(ROOT, "Videos"))
             print(f"{name[:44]:44s} {r['steady']:7.1f} {r['steady_sd']:5.1f} "
                   f"{G*np.tan(np.radians(r['steady'])):7.1f} {r['eps']:5.1f}")
-        rows = [{"video": os.path.relpath(r["video"], HERE), "steady_theta_deg": r["steady"],
+        rows = [{"video": os.path.relpath(r["video"], ROOT), "steady_theta_deg": r["steady"],
                  "sd": r["steady_sd"], "g_tan_theta": G * np.tan(np.radians(r["steady"])),
                  "eps_deg": r["eps"], "roll_deg": r["roll"]} for r in results]
-        out = os.path.join(args.outdir or os.path.join(HERE, "output"), "flyout_summary.csv")
+        out = os.path.join(args.outdir or os.path.join(ROOT, "output", "report"), "flyout_summary.csv")
         pd.DataFrame(rows).to_csv(out, index=False)
         print(f"Summary: {out}")
         return

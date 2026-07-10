@@ -15,13 +15,14 @@ import accel
 
 G = 9.81
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 ACCEL = {1: "1st Trial.csv", 2: "2nd Trial.csv", 3: "3rd Trial.csv", 4: "4th Trial.csv"}
 
 
 def angle_csv(trial):
     # prefer Alex's camera (its elevation estimate is the trusted one)
-    for pat in (f"output/*trial {trial}_angle_alex.csv", f"output/*trial {trial}_angle_ryan.csv"):
-        hits = glob.glob(os.path.join(HERE, pat))
+    for pat in (f"output/angles/*trial {trial}_angle_alex.csv", f"output/angles/*trial {trial}_angle_ryan.csv"):
+        hits = glob.glob(os.path.join(ROOT, pat))
         if hits:
             return hits[0]
     return None
@@ -29,7 +30,7 @@ def angle_csv(trial):
 
 for trial in (1, 2, 3, 4):
     acsv = angle_csv(trial)
-    pcsv = os.path.join(HERE, "Accelerometer data", ACCEL[trial])
+    pcsv = os.path.join(ROOT, "data", ACCEL[trial])
     if not acsv or not os.path.exists(pcsv):
         print(f"trial {trial}: missing data, skipped")
         continue
@@ -90,7 +91,7 @@ for trial in (1, 2, 3, 4):
 
     fig.suptitle(f"Trial {trial}: fly-out angle (video) and rider acceleration (phone)",
                  fontsize=13, fontweight="bold")
-    out = os.path.join(HERE, "output", f"trial {trial}_theta_accel.png")
+    out = os.path.join(ROOT, "output", "report", f"trial {trial}_theta_accel.png")
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"trial {trial}: {out}   (phone shifted {lag:+.1f}s onto the video clock)")

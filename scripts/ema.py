@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import accel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 
 
 def main():
@@ -83,7 +84,7 @@ def main():
     axes[-1].set_xlabel(xlabel)
     fig.suptitle(f"Acceleration: raw vs EMA  ({tag})", fontsize=13, fontweight="bold")
 
-    png, csv = accel.out_paths(args, HERE, "_ema")
+    png, csv = accel.out_paths(args, ROOT, "_ema")
     fig.savefig(png, dpi=150)
     pd.DataFrame(out).to_csv(csv, index=False)
     print(f"Graph:   {png}")

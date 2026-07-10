@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 import accel
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
 
 
 def main():
@@ -87,7 +88,7 @@ def main():
     fig.suptitle(f"Horizontal acceleration magnitude, z excluded  ({tag})",
                  fontsize=13, fontweight="bold")
 
-    png, csv = accel.out_paths(args, HERE, "_xy_ema")
+    png, csv = accel.out_paths(args, ROOT, "_xy_ema")
     fig.savefig(png, dpi=150)
     pd.DataFrame({xlabel: t, "a_xy": axy, "EMA a_xy": axy_ema}).to_csv(csv, index=False)
     print(f"Graph:   {png}")

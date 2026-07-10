@@ -15,18 +15,19 @@ acceleration, so on the rider **θ_accel = arctan(aT / g)** at steady state.)
 ## Layout
 
 ```
-accel.py         shared helpers: CSV loading, column sniffing, EMA, plot styling, output paths
-ema.py           EMA-smooth every channel (ax/ay/az/aT), one panel each
-ema_noz.py       EMA of the horizontal magnitude sqrt(ax^2+ay^2) (z excluded), with --auto / --log
-volare_angle.py  fly-out angle theta(t) from a ride video, fully automatic
-swing_angle.py   older tool for a planar (back-and-forth) pendulum ride
-output/          generated PNGs + CSVs
-*.csv            raw accelerometer recordings
-Videos/          raw footage (not in git - too large)
+scripts/
+  volare_angle.py   fly-out angle theta(t) from a ride video, fully automatic
+  trial_graphs.py   per-trial report figures: angle + acceleration on a shared clock
+  ema.py            EMA-smooth every accelerometer channel, one panel each
+  ema_noz.py        EMA of the horizontal magnitude sqrt(ax^2+ay^2)
+  accel.py          shared helpers: CSV loading, EMA, plot styling, output paths
+data/               the four phone recordings, one per trial
+output/
+  angles/           per-video theta(t) plots + CSVs (+ check videos, local only)
+  accel/            video-vs-phone overlay per video
+  report/           trial figures + flyout_summary.csv
+Videos/             raw footage (not in git - too large)
 ```
-
-The analysis scripts import the common code in `accel.py`, so loading/smoothing/
-styling lives in exactly one place.
 
 ## Setup
 
@@ -34,33 +35,13 @@ styling lives in exactly one place.
 pip install numpy pandas matplotlib opencv-python scipy
 ```
 
-## Accelerometer analysis
+## Fly-out angle from video - fully automatic
+
+`scripts/volare_angle.py` measures θ(t) from a video with no clicking:
 
 ```bash
-# every channel, raw vs EMA
-python ema.py 1st_Trial.csv
-
-# horizontal magnitude, auto-trimmed to just the ride, log y to see the exponential spin-up
-python ema_noz.py 1st_Trial.csv --auto --log -o output/1st_auto_log.png
-```
-
-Common flags: `-n SPAN` (EMA span, default 40; alpha = 2/(N+1)) or `-a ALPHA`
-directly, `--start/--end T` to trim by time, `--auto` (ema_noz only) to keep just
-the active ride, `--log` (ema_noz only) for a log y-axis. Every run writes a PNG
-and a matching CSV to `output/`.
-
-What the data shows: a queue/quiet period, an **exponential spin-up** of the swing
-amplitude, a sustained plateau at ~15–20 m/s² (≈1.5–2 g), then spin-down.
-
-## Fly-out angle from video (volare_angle.py) - fully automatic
-
-The ride is a rotating chair swing, i.e. a conical pendulum: at the fly-out angle
-θ from vertical, tan θ = a_horizontal / g, so the video angle ties directly to the
-accelerometer. `volare_angle.py` measures θ(t) from a video with **no clicking**:
-
-```bash
-python volare_angle.py "Videos/Alex's persepctive/probably trial 1.MOV" --annot
-python volare_angle.py --all          # every video under Videos/, plus a summary table
+python scripts/volare_angle.py "Videos/Alex's persepctive/probably trial 1.MOV" --annot
+python scripts/volare_angle.py --all      # every video under Videos/, plus a summary table
 ```
 
 How it works, per video:
@@ -68,29 +49,31 @@ How it works, per video:
    so camera micro-wobble on static edges is ignored), and the true vertical from
    long building edges in the background (handles camera roll).
 2. **Measurement** (every frame): moving chairs are isolated by background
-   subtraction; on each side the extreme blob is the side-on chair - a rope at
-   azimuth φ shows tan θ' = tan θ·|cos φ|, so the extreme chair shows the TRUE
-   side-on angle. From its seat, rays are scanned up-and-inward for the chain in
-   the raw pixels: the winning ray must be **continuously covered** (crossing
-   ropes fail), **thin** (the canopy fails), and agree with a robust line refit.
-3. **Aggregation**: per time window the upper quartile per side, best side kept
+   subtraction; on each side the outermost blob is the side-on chair, and rays are
+   scanned above its seat for the chain - the winning ray must be continuously
+   covered (crossing ropes fail), thin (the canopy fails), and agree with a robust
+   line refit. A per-side lock re-fits the same chain on later frames so the check
+   video reads continuously.
+3. **Ride-state detection**: measurements only count while the ride actually
+   rotates. Tent-seam flutter on the parked canopy, boarding crowds and passing
+   clouds all produce motion, so rotation requires ride-wide fast motion that
+   persists and sweeps out the chair ring; parked windows report as rest.
+4. **Aggregation**: per time window the upper quantile per side, best side kept
    (occlusion only ever lowers a reading), giving θ'(t) with a p10-p90 band -
    the band also shows the rotor-tilt "wave".
-4. **Elevation correction**: the swept chair ring's lower boundary is an ellipse
-   arc whose axis ratio is sin(elevation); tan θ = tan θ'·cos(elevation). If the
-   ring bottom is hidden by scenery the tool says so (confidence flag) - trust
-   the apparent angle more than the corrected one in that case, or pass `--eps`.
-5. **Accelerometer tie-in**: for trials with a phone log it overlays
-   θ_accel = arctan(aT/g) on the video curve (aligned by cross-correlation) and
-   compares the steady states.
+5. **Elevation correction**: the swept chair ring's lower boundary is an ellipse
+   arc whose axis ratio is sin(elevation); the steepest-apparent-chain formula
+   then inverts to the true angle. If the ring bottom is hidden by scenery the
+   tool says so (confidence flag) - pass `--eps` if you know the elevation.
+6. **Accelerometer tie-in**: for trials with a phone log it overlays
+   θ_accel = arctan(aT/g) on the video curve (aligned by cross-correlation).
 
-Output per video: `output/<video>_angle.png` (θ(t) + band + steady state and
-g·tan θ), a CSV, with `--annot` a check video with the protractor gauge drawn on
-every measured chain, and `output/<video>_vs_accel.png` where phone data exists.
+Outputs land in `output/angles/` and `output/accel/`; `--all` also writes
+`output/report/flyout_summary.csv`.
 
 | flag | meaning |
 |------|---------|
-| `--all` | run every video under `Videos/`, write `output/flyout_summary.csv` |
+| `--all` | run every video under `Videos/`, write the summary table |
 | `--annot` | write a full-length check video with the angle gauge drawn on (large file, kept local) |
 | `--debug` | dump calibration overlays + gate rejection counts |
 | `--eps E` | override the camera elevation (deg) |
@@ -98,7 +81,26 @@ every measured chain, and `output/<video>_vs_accel.png` where phone data exists.
 | `--start/--end T` | limit the analysed time range |
 | `--recal` | ignore the cached auto-calibration sidecar |
 
-### Validated accuracy
+## Report figures
+
+```bash
+python scripts/trial_graphs.py
+```
+
+writes `output/report/trial N_theta_accel.png` for each trial: fly-out angle over
+time (video and phone side by side) above the rider's acceleration over time, on
+a shared clock. Spans where the ride spins without the phone rider aboard (empty
+warm-up and loading spins) are shaded - the camera sees the ride, the phone in
+the queue does not, so disagreement there is expected rather than error.
+
+## Accelerometer-only plots
+
+```bash
+python scripts/ema.py "data/1st Trial.csv"
+python scripts/ema_noz.py "data/1st Trial.csv" --auto --log
+```
+
+## Validated accuracy
 
 Against a synthetic wave-swinger (16 chairs, spinning patterned canopy, cluttered
 background with vertical building edges and horizontal rails, camera elevation 15°,
@@ -106,21 +108,16 @@ camera roll 2°, sensor noise) with known ground truth, zero manual input:
 
 | quantity | result | truth |
 |----------|--------|-------|
-| steady fly-out | 39.6 ± 0.3° | 40.00° |
+| steady fly-out | 39.8 ± 0.5° | 40.00° |
 | θ(t) RMS over ramp/plateau/spin-down | 1.7° | - |
 | camera roll detected | +1.97° | +2.0° |
 | camera elevation from the chair ring | 15.9° | 15° |
 
-Uncertainty on real footage: the statistical precision is ~±1° (per-trial sd),
-and the dominant systematic is the camera-elevation estimate, worth roughly ±3°
-on the absolute angle (the tool prints a confidence flag; pass `--eps` if you
-know the camera's elevation). On trial 1 the video gives 47.9° (Alex's camera,
-elevation trusted) vs the phone's arctan(aT/g) = 50.9° - independent instruments
-agreeing within that systematic.
-
-## Planar swing tool (swing_angle.py)
-
-An earlier tool for a back-and-forth (planar) pendulum ride: tracks the seat with
-ORB feature matching (~0.02° on synthetic), fits the pivot from the swept arc, and
-writes the swing angle + g·sin θ. Kept for reference; the Volare is a rotating
-ride, so `volare_angle.py` is the tool for this project's videos.
+On the real footage: statistical precision is ~±1-2° per trial; the dominant
+systematic is each camera's elevation estimate, worth several degrees on the
+absolute angle (Alex's camera reads low, Ryan's high, the phone in between).
+Across four trials and three instruments the steady fly-out is **θ ≈ 50 ± 4°**,
+giving a horizontal acceleration of **g·tan θ ≈ 11-13 m/s²**, consistent with
+the conical-pendulum model. Brief wind gusts can still leave an isolated spurious
+window or two during idle stretches; the phone trace beside the curve makes them
+obvious.

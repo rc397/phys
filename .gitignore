@@ -10,10 +10,9 @@ Videos/
 # per-video calibration caches
 *.volare.json
 *.volare_masks.npz
-*.swing.json
 
 # verification videos are large; regenerate with --annot
-output/*_annot.mp4
+output/**/*_annot.mp4
 
 # other groups' data, kept local only
 miachen*
