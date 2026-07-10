@@ -1,6 +1,6 @@
 # Report figures: one per trial, angle over time (video) above acceleration over
-# time (phone), on a shared clock. The phone trace is shifted onto the video clock
-# by cross-correlating the two angle profiles, same as volare_angle does.
+# time (phone), on a shared clock. The phone trace is shifted onto the video
+# clock using the recording stamps resolved in vidsync, same as everywhere.
 #   python trial_graphs.py
 import glob
 import os
@@ -44,10 +44,15 @@ for trial in (1, 2, 3, 4):
     # over it for the line the video should be compared against
     at_w = pd.Series(at_s).rolling(801, center=True, min_periods=100).mean().to_numpy()
 
-    # put the phone on the video clock (alex camera, same rule as everywhere)
-    th_phone = np.degrees(np.arctan(np.nan_to_num(at_s) / G))
-    lag = vidsync.xcorr_lag(v["time"].to_numpy(),
-                            np.nan_to_num(v["theta_ema"].to_numpy()), ta, th_phone)
+    # put the phone on the video clock (same resolved sync as everywhere)
+    cam = "alex" if acsv.endswith("_alex.csv") else "ryan"
+    sync = vidsync.trial_sync(trial)
+    if sync:
+        lag = sync[f"lag_{cam}"]
+    else:
+        th_phone = np.degrees(np.arctan(np.nan_to_num(at_s) / G))
+        lag = vidsync.xcorr_lag(v["time"].to_numpy(),
+                                np.nan_to_num(v["theta_ema"].to_numpy()), ta, th_phone)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True,
                                    constrained_layout=True)

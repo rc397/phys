@@ -726,21 +726,16 @@ def accel_compare(res, accel_csv, args):
     at = pd.to_numeric(a[at_col], errors="coerce").to_numpy()
     at_s = accel.ema(at, 2 / 301)
     th_a = np.degrees(np.arctan(at_s / G))
-    # align the clocks: alex's angle curve correlates against the phone; any
-    # other camera is synced to alex on the ride's motion fingerprint, because
-    # the phone only shares the loaded run (see vidsync)
+    # align the clocks: the trial videos sync from their recording stamps
+    # (see vidsync); unknown footage falls back to correlating the curves
     import vidsync
     grid = 0.5
     tv = df["time"].to_numpy()
     thv = np.nan_to_num(df["theta_ema"].to_numpy())
-    lag = vidsync.xcorr_lag(tv, thv, ta, np.nan_to_num(th_a))
-    if camera_tag(res["video"]) != "alex":
-        via = vidsync.lag_via_alex(res["video"], ta, np.nan_to_num(th_a), ROOT)
-        if via is not None:
-            if abs(via - lag) > 2:
-                print(f"Sync:    via the alex camera (direct correlation was "
-                      f"{lag - via:+.0f}s off)")
-            lag = via
+    lag = vidsync.video_lag(res["video"])
+    if lag is None:
+        lag = vidsync.xcorr_lag(tv, thv, ta, np.nan_to_num(th_a))
+        print("Sync:    from curve correlation (video not in the sync table)")
     gv = np.arange(0, tv.max() + grid, grid)
     sv = np.interp(gv, tv, thv, left=0, right=0)
     ga = np.arange(ta.min(), ta.max(), grid)

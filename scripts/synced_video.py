@@ -1,8 +1,8 @@
 # Builds a synced side-by-side video per trial: Alex's camera and Ryan's camera
 # playing together on one clock, with the rider's accelerometer trace scrolling
-# underneath and a cursor marking "now". The clocks are aligned the same way as
-# the analysis: cross-correlating each video's angle curve against the phone's
-# arctan(aT/g), so all three views show the same physical moment.
+# underneath and a cursor marking "now". The clocks come from the recordings
+# themselves (phyphox header, the phones' file stamps - resolved in vidsync),
+# so all three views show the same physical moment.
 #   python scripts/synced_video.py            all four trials
 #   python scripts/synced_video.py 2          just trial 2
 import glob
@@ -15,7 +15,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import accel
-from vidsync import video_offset
+import vidsync
 
 G = 9.81
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -27,34 +27,13 @@ STRIP_H = 230
 HEAD_H = 34
 
 
-def find_video(trial, cam):
-    folder = "Alex's persepctive" if cam == "alex" else "Physics video, Ryan Perspective"
-    ext = "MOV" if cam == "alex" else "mp4"
-    hits = glob.glob(os.path.join(ROOT, "Videos", folder, f"*trial {trial}.{ext}"))
-    return hits[0] if hits else None
-
-
-def lag_for(trial, cam):
-    # phone time = video time + lag, from the same correlation the analysis uses
+def theta_for(trial, cam):
+    # the camera's own angle curve, for the readout above each pane
     csvs = glob.glob(os.path.join(ROOT, "output", "angles", f"*trial {trial}_angle_{cam}.csv"))
     if not csvs:
         return None
     v = pd.read_csv(csvs[0])
-    a = accel.load(os.path.join(ROOT, "data", ACCEL[trial]))
-    ta = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()
-    at = pd.to_numeric(a[a.columns[4]], errors="coerce").to_numpy()
-    th_a = np.degrees(np.arctan(accel.ema(at, 2 / 301) / G))
-    grid = 0.5
-    gv = np.arange(0, v["time"].max() + grid, grid)
-    sv = np.interp(gv, v["time"], np.nan_to_num(v["theta_ema"]), left=0, right=0)
-    ga = np.arange(ta.min(), ta.max(), grid)
-    sa = np.interp(ga, ta, np.nan_to_num(th_a))
-    sv_n = (sv - sv.mean()) / (sv.std() + 1e-9)
-    sa_n = (sa - sa.mean()) / (sa.std() + 1e-9)
-    corr = np.correlate(sa_n, sv_n, mode="full")
-    lag = (np.argmax(corr) - (len(sv_n) - 1)) * grid + ga[0]
-    theta = (v["time"].to_numpy(), np.nan_to_num(v["theta_ema"].to_numpy()))
-    return lag, theta
+    return v["time"].to_numpy(), np.nan_to_num(v["theta_ema"].to_numpy())
 
 
 class Player:
@@ -107,19 +86,14 @@ def accel_strip(ta, at_s, at_w, t0, t1, width):
 
 
 def build(trial):
-    va = find_video(trial, "alex")
-    vr = find_video(trial, "ryan")
-    la = lag_for(trial, "alex")
-    lr = lag_for(trial, "ryan")
-    if not (va and vr and la and lr):
+    sync = vidsync.trial_sync(trial)
+    th_a = theta_for(trial, "alex")
+    th_r = theta_for(trial, "ryan")
+    if not (sync and th_a and th_r):
         print(f"trial {trial}: missing pieces, skipped")
         return
-    lag_a, th_a = la
-    _, th_r = lr
-    # sync the cameras to each other on the ride's motion, then anchor the pair
-    # to the phone through Alex's verified lag
-    off = video_offset(va, vr)
-    lag_r = lag_a - off
+    va, vr = sync["alex"], sync["ryan"]
+    lag_a, lag_r = sync["lag_alex"], sync["lag_ryan"]
 
     a = accel.load(os.path.join(ROOT, "data", ACCEL[trial]))
     ta = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()

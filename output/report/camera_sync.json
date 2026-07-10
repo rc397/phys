@@ -1,0 +1,34 @@
+{
+  "timezone_hours": 10.0,
+  "alex_clock_fast_s": 42.8,
+  "trials": {
+    "1": {
+      "alex": "Videos/Alex's persepctive/probably trial 1.MOV",
+      "ryan": "Videos/Physics video, Ryan Perspective/probably trial 1.mp4",
+      "off_alex_to_ryan": -94.86,
+      "lag_alex": 425.16,
+      "lag_ryan": 520.03
+    },
+    "2": {
+      "alex": "Videos/Alex's persepctive/probably trial 2.MOV",
+      "ryan": "Videos/Physics video, Ryan Perspective/trial 2.mp4",
+      "off_alex_to_ryan": -198.61,
+      "lag_alex": 279.91,
+      "lag_ryan": 478.52
+    },
+    "3": {
+      "alex": "Videos/Alex's persepctive/trial 3.MOV",
+      "ryan": "Videos/Physics video, Ryan Perspective/trial 3.mp4",
+      "off_alex_to_ryan": -107.93,
+      "lag_alex": 340.89,
+      "lag_ryan": 448.82
+    },
+    "4": {
+      "alex": "Videos/Alex's persepctive/trial 4.MOV",
+      "ryan": "Videos/Physics video, Ryan Perspective/trial 4.mp4",
+      "off_alex_to_ryan": -24.03,
+      "lag_alex": 344.3,
+      "lag_ryan": 368.32
+    }
+  }
+}

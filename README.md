@@ -18,6 +18,8 @@ acceleration, so on the rider **θ_accel = arctan(aT / g)** at steady state.)
 scripts/
   volare_angle.py   fly-out angle theta(t) from a ride video, fully automatic
   trial_graphs.py   per-trial report figures: angle + acceleration on a shared clock
+  synced_video.py   both cameras + the accelerometer trace playing on one clock
+  vidsync.py        that clock: sync anchored on the recordings' own timestamps
   ema.py            EMA-smooth every accelerometer channel, one panel each
   ema_noz.py        EMA of the horizontal magnitude sqrt(ax^2+ay^2)
   accel.py          shared helpers: CSV loading, EMA, plot styling, output paths
@@ -66,7 +68,8 @@ How it works, per video:
    then inverts to the true angle. If the ring bottom is hidden by scenery the
    tool says so (confidence flag) - pass `--eps` if you know the elevation.
 6. **Accelerometer tie-in**: for trials with a phone log it overlays
-   θ_accel = arctan(aT/g) on the video curve (aligned by cross-correlation).
+   θ_accel = arctan(aT/g) on the video curve (clocks aligned from the
+   recording stamps - see the sync note under the synced video below).
 
 Outputs land in `output/angles/` and `output/accel/`; `--all` also writes
 `output/report/flyout_summary.csv`.
@@ -101,8 +104,18 @@ python scripts/synced_video.py        # or:  python scripts/synced_video.py 2
 
 writes `output/report/trial N_synced.mp4`: both cameras playing side by side on
 one clock with the rider's accelerometer trace scrolling underneath and a cursor
-marking the current moment - the alignment comes from the same cross-correlation
-the analysis uses. Large files, kept local.
+marking the current moment. Large files, kept local.
+
+**How the clocks line up** (`scripts/vidsync.py`): correlating the signals blind
+is unreliable here - the ride is periodic, so a cross-correlation happily locks
+a whole rotation (or a whole spin cycle) off, which is exactly what an earlier
+version did. The sync instead comes from the recordings themselves: each phyphox
+log states when it started, Ryan's phone stamps every mp4 when recording stops,
+and Alex's iPhone writes the recording start into each MOV (that clock ran ~43 s
+fast on the day; the constant is fitted out). Correlating the two cameras' angle
+envelopes is only trusted within a few seconds of what the stamps predict. The
+resolved table lives in `output/report/camera_sync.json`; on trial 1 the stamp
+arithmetic and the content agree to 0.1 s.
 
 ## Accelerometer-only plots
 
