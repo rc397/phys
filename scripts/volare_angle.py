@@ -726,18 +726,25 @@ def accel_compare(res, accel_csv, args):
     at = pd.to_numeric(a[at_col], errors="coerce").to_numpy()
     at_s = accel.ema(at, 2 / 301)
     th_a = np.degrees(np.arctan(at_s / G))
-    # align by cross-correlating the two profiles on a common grid
+    # align the clocks: alex's angle curve correlates against the phone; any
+    # other camera is synced to alex on the ride's motion fingerprint, because
+    # the phone only shares the loaded run (see vidsync)
+    import vidsync
     grid = 0.5
     tv = df["time"].to_numpy()
     thv = np.nan_to_num(df["theta_ema"].to_numpy())
+    lag = vidsync.xcorr_lag(tv, thv, ta, np.nan_to_num(th_a))
+    if camera_tag(res["video"]) != "alex":
+        via = vidsync.lag_via_alex(res["video"], ta, np.nan_to_num(th_a), ROOT)
+        if via is not None:
+            if abs(via - lag) > 2:
+                print(f"Sync:    via the alex camera (direct correlation was "
+                      f"{lag - via:+.0f}s off)")
+            lag = via
     gv = np.arange(0, tv.max() + grid, grid)
     sv = np.interp(gv, tv, thv, left=0, right=0)
     ga = np.arange(ta.min(), ta.max(), grid)
     sa = np.interp(ga, ta, np.nan_to_num(th_a))
-    sv_n = (sv - sv.mean()) / (sv.std() + 1e-9)
-    sa_n = (sa - sa.mean()) / (sa.std() + 1e-9)
-    corr = np.correlate(sa_n, sv_n, mode="full")
-    lag = (np.argmax(corr) - (len(sv_n) - 1)) * grid + ga[0]
     fig, ax = plt.subplots(figsize=(11, 4.2), constrained_layout=True)
     ax.plot(gv, sv, color=accel.C_EMA, lw=2, label="video theta(t)")
     ax.plot(ga - lag, sa, color=accel.C_FIT, lw=1.5, label="phone arctan(aT/g)")

@@ -12,6 +12,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 import accel
+import vidsync
 
 G = 9.81
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -43,15 +44,10 @@ for trial in (1, 2, 3, 4):
     # over it for the line the video should be compared against
     at_w = pd.Series(at_s).rolling(801, center=True, min_periods=100).mean().to_numpy()
 
-    # put the phone on the video clock via the two angle profiles
-    grid = 0.5
-    gv = np.arange(0, v["time"].max() + grid, grid)
-    sv = np.interp(gv, v["time"], np.nan_to_num(v["theta_ema"]), left=0, right=0)
-    ga = np.arange(ta.min(), ta.max(), grid)
-    sa = np.interp(ga, ta, np.degrees(np.arctan(np.nan_to_num(at_s) / G)))
-    corr = np.correlate((sa - sa.mean()) / (sa.std() + 1e-9),
-                        (sv - sv.mean()) / (sv.std() + 1e-9), mode="full")
-    lag = (np.argmax(corr) - (len(sv) - 1)) * grid + ga[0]
+    # put the phone on the video clock (alex camera, same rule as everywhere)
+    th_phone = np.degrees(np.arctan(np.nan_to_num(at_s) / G))
+    lag = vidsync.xcorr_lag(v["time"].to_numpy(),
+                            np.nan_to_num(v["theta_ema"].to_numpy()), ta, th_phone)
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True,
                                    constrained_layout=True)

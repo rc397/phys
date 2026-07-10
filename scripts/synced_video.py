@@ -15,6 +15,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import accel
+from vidsync import video_offset
 
 G = 9.81
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -54,53 +55,6 @@ def lag_for(trial, cam):
     lag = (np.argmax(corr) - (len(sv_n) - 1)) * grid + ga[0]
     theta = (v["time"].to_numpy(), np.nan_to_num(v["theta_ema"].to_numpy()))
     return lag, theta
-
-
-def motion_series(path):
-    # how much of the scene moves, over time: both cameras watch the same ride,
-    # so these curves are near-identical fingerprints and sync the two videos
-    # far more reliably than going through the phone (which misses empty spins).
-    # Cached next to the video because it needs a full decode.
-    cache = os.path.splitext(path)[0] + ".volare_motion.npz"
-    if os.path.exists(cache):
-        z = np.load(cache)
-        return z["t"], z["m"]
-    cap = cv2.VideoCapture(path)
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    step = max(1, int(round(fps / 8)))
-    ts, ms, prev, fi = [], [], None, -1
-    while True:
-        ok, f = cap.read()
-        if not ok:
-            break
-        fi += 1
-        if fi % step:
-            continue
-        g = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(f, (480, 270)),
-                                          cv2.COLOR_BGR2GRAY), (5, 5), 0)
-        if prev is not None:
-            ts.append(fi / fps)
-            ms.append(int(np.count_nonzero(cv2.absdiff(g, prev) > 16)))
-        prev = g
-    cap.release()
-    t, m = np.array(ts), np.array(ms, float)
-    np.savez_compressed(cache, t=t, m=m)
-    return t, m
-
-
-def video_offset(path_a, path_r):
-    # lag such that ryan_time = alex_time + offset, from the motion fingerprints
-    ta_, ma = motion_series(path_a)
-    tr_, mr = motion_series(path_r)
-    grid = 0.5
-    ga = np.arange(ta_.min(), ta_.max(), grid)
-    gr = np.arange(tr_.min(), tr_.max(), grid)
-    xa = np.interp(ga, ta_, ma)
-    xr = np.interp(gr, tr_, mr)
-    xa = (xa - xa.mean()) / (xa.std() + 1e-9)
-    xr = (xr - xr.mean()) / (xr.std() + 1e-9)
-    c = np.correlate(xr, xa, "full")
-    return (np.argmax(c) - (len(xa) - 1)) * grid + gr[0] - ga[0]
 
 
 class Player:
