@@ -93,6 +93,17 @@ a shared clock. Spans where the ride spins without the phone rider aboard (empty
 warm-up and loading spins) are shaded - the camera sees the ride, the phone in
 the queue does not, so disagreement there is expected rather than error.
 
+## Synced three-view video
+
+```bash
+python scripts/synced_video.py        # or:  python scripts/synced_video.py 2
+```
+
+writes `output/report/trial N_synced.mp4`: both cameras playing side by side on
+one clock with the rider's accelerometer trace scrolling underneath and a cursor
+marking the current moment - the alignment comes from the same cross-correlation
+the analysis uses. Large files, kept local.
+
 ## Accelerometer-only plots
 
 ```bash
