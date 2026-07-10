@@ -60,6 +60,22 @@ for trial in (1, 2, 3, 4):
     th_p = np.degrees(np.arctan(at_s / G))
     ax1.plot(tp[keep], th_p[keep], color=accel.C_FIT, lw=1.6,
              label="phone  arctan(aT/g)")
+    # the ride also spins while empty / loading; the phone in the queue sees
+    # nothing then, so mark those spans rather than let them read as error
+    ph_on_grid = np.interp(v["time"], tp[keep], th_p[keep], left=0, right=0)
+    solo = (v["theta_ema"].to_numpy() > 15) & (ph_on_grid < 5)
+    if solo.any():
+        tarr = v["time"].to_numpy()
+        start = None
+        first = True
+        for i, s in enumerate(solo):
+            if s and start is None:
+                start = tarr[i]
+            if (not s or i == len(solo) - 1) and start is not None:
+                ax1.axvspan(start, tarr[i], color="#bbbbbb", alpha=0.18,
+                            label="ride running, phone rider not aboard" if first else None)
+                first = False
+                start = None
     ax1.set_ylabel("fly-out angle  (deg)")
     ax1.legend(loc="upper left", fontsize=9, framealpha=0.9)
     accel.style_axis(ax1)
