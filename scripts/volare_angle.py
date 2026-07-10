@@ -261,8 +261,9 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
     meas = []                                        # (t, side, theta_apparent, agree)
     sweeps = {}                                      # per-window unions of the chair mask
     activity = []                                    # (t, moving px) for rest detection
-    rej = {"few_px": 0, "still": 0, "few_side": 0, "no_chain": 0, "refit": 0,
-           "range": 0, "kept": 0, "held": 0}
+    rej = {"few_px": 0, "still": 0, "cam": 0, "few_side": 0, "no_chain": 0,
+           "refit": 0, "range": 0, "kept": 0, "held": 0}
+    bg_area = max(1, int(np.count_nonzero(roi == 0)))
     # once a chain is found, keep re-fitting that same chain on later frames
     # rather than demanding a fresh find every time; a lock lives ~2 s
     lock = {"left": None, "right": None}
@@ -318,13 +319,23 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         fg = mog.apply(small)
         gb = cv2.GaussianBlur(cv2.cvtColor(small, cv2.COLOR_BGR2GRAY), (5, 5), 0)
         fast_mass = 0
+        cam_moving = False
         if len(gdeq) == gdeq.maxlen:
-            fast = (cv2.absdiff(gb, gdeq[0]) > 18) & (roi > 0)
-            fast_mass = int(np.count_nonzero(fast))
+            diff = cv2.absdiff(gb, gdeq[0]) > 18
+            fast_mass = int(np.count_nonzero(diff & (roi > 0)))
+            # a fixed camera keeps the background outside the ride still; when a
+            # chunk of it moves, the camera itself is moving and nothing in the
+            # frame can be trusted (this catches packing up at the end of a clip)
+            cam_moving = np.count_nonzero(diff & (roi == 0)) > 0.04 * bg_area
         gdeq.append(gb)
         if fi < f_lo or fi < meas_from:
             continue
         t = fi / fps
+        if cam_moving:
+            rej["cam"] += 1
+            rot_streak = 0
+            annot_frame(small, [], t, "camera moving")
+            continue
         raw = ((fg >= 200) & (roi > 0)).astype(np.uint8) * 255
         chair = cv2.morphologyEx(raw, cv2.MORPH_OPEN, kernel_open)
         chair = cv2.morphologyEx(chair, cv2.MORPH_CLOSE, kernel_join)
