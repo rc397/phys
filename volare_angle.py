@@ -260,12 +260,16 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
     meas = []                                        # (t, side, theta_apparent, agree)
     sweeps = {}                                      # per-window unions of the chair mask
     activity = []                                    # (t, moving px) for rest detection
-    rej = {"few_px": 0, "few_side": 0, "no_chain": 0, "refit": 0, "range": 0,
-           "kept": 0, "held": 0}
+    rej = {"few_px": 0, "still": 0, "few_side": 0, "no_chain": 0, "refit": 0,
+           "range": 0, "kept": 0, "held": 0}
     # once a chain is found, keep re-fitting that same chain on later frames
     # rather than demanding a fresh find every time; a lock lives ~2 s
     lock = {"left": None, "right": None}
     max_hold = max(3, int(round(2.0 * fps / step)))
+    from collections import deque
+    past = deque(maxlen=max(1, int(round(0.3 * fps / step))))   # masks ~0.3 s back
+    rot_streak = 0                                   # rotation must persist to count
+    streak_min = max(3, int(round(0.7 * fps / step)))
 
     # the check video covers every processed frame, so it plays like the real ride
     annot_vw = None
@@ -315,16 +319,44 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         chair = cv2.morphologyEx(raw, cv2.MORPH_OPEN, kernel_open)
         chair = cv2.morphologyEx(chair, cv2.MORPH_CLOSE, kernel_join)
         n_ch = cv2.countNonZero(chair)
-        activity.append((t, n_ch))
         if n_ch < a_min:
             rej["few_px"] += 1
+            activity.append((t, n_ch, 0))
+            past.append(chair)
             annot_frame(small, [], t, "at rest")
             continue
         nlab, lab, stats, cent = cv2.connectedComponentsWithStats(chair, 8)
-        w = int(t // args.win)
-        if w not in sweeps:
-            sweeps[w] = np.zeros((Hs, PROC_W), np.uint8)
-        sweeps[w] |= chair
+        # only a ROTATING ride is measurable. A parked canopy fluttering in the
+        # breeze (whose tent seams look exactly like chains) still shows moving
+        # pixels, but flutter oscillates IN PLACE: rotation displaces the chairs
+        # completely within a third of a second, so the mask overlap collapses
+        big = [i for i in range(1, nlab) if stats[i, cv2.CC_STAT_AREA] >= a_min]
+        if big:
+            xspread = (max(stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH]
+                           for i in big)
+                       - min(stats[i, cv2.CC_STAT_LEFT] for i in big)) / max(roi_w, 1)
+        else:
+            xspread = 0.0
+        iou = 1.0
+        if len(past) == past.maxlen:
+            prev = past[0]
+            inter = cv2.countNonZero(chair & prev)
+            union = cv2.countNonZero(chair | prev)
+            iou = inter / union if union else 1.0
+        past.append(chair)
+        # a gust can fake one coherent-looking frame, but real rotation persists
+        rot_streak = rot_streak + 1 if (len(big) >= 4 and xspread >= 0.45
+                                        and iou <= 0.35) else 0
+        rotating = rot_streak >= streak_min
+        activity.append((t, n_ch, 1 if rotating else 0))
+        if not rotating:
+            rej["still"] += 1
+            annot_frame(small, [], t, "at rest")
+            continue
+        t_w = int(t // args.win)
+        if t_w not in sweeps:
+            sweeps[t_w] = np.zeros((Hs, PROC_W), np.uint8)
+        sweeps[t_w] |= chair
         # raw pixels for the chain search
         rys_, rxs_ = np.where(raw > 0)
         p_r = np.column_stack([rxs_, rys_]).astype(np.float32)
@@ -486,7 +518,7 @@ def aggregate(meas, activity, a_min, args):
     # Windows where nothing on the ride moved are reported as at rest (theta 0),
     # so the curve covers the whole video instead of skipping the idle waits.
     m = pd.DataFrame(meas, columns=["t", "side", "theta", "agree"])
-    act = pd.DataFrame(activity, columns=["t", "px"])
+    act = pd.DataFrame(activity, columns=["t", "px", "rotating"])
     win = args.win
     m["w"] = (m["t"] // win).astype(int)
     act["w"] = (act["t"] // win).astype(int)
@@ -511,10 +543,11 @@ def aggregate(meas, activity, a_min, args):
                          "n": len(grp),
                          "sides": len(per_side),
                          "rest": 0})
-        elif float(agrp["px"].median()) < a_min:
+        elif float(agrp["rotating"].median()) < 0.5:
+            # nothing moving, or only in-place flutter: the ride is parked
             rows.append({"time": (w + 0.5) * win, "theta_apparent": 0.0,
                          "lo": 0.0, "hi": 0.0, "n": 0, "sides": 0, "rest": 1})
-        # moving but nothing measurable passed the gates: leave an honest gap
+        # rotating but nothing measurable passed the gates: leave an honest gap
     return pd.DataFrame(rows).sort_values("time").reset_index(drop=True)
 
 

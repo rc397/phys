@@ -51,14 +51,19 @@ for trial in (1, 2, 3, 4):
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(11, 6.5), sharex=True,
                                    constrained_layout=True)
-    ax1.plot(v["time"], v["theta"], ".", color=accel.C_RAW, ms=3.5, label="per window")
-    ax1.plot(v["time"], v["theta_ema"], color=accel.C_EMA, lw=2, label="smoothed")
+    tp = ta - lag                                    # phone time on the video clock
+    keep = (tp >= 0) & (tp <= v["time"].max())
+
+    # top: both angle estimates together - if the physics holds they line up
+    ax1.plot(v["time"], v["theta"], ".", color=accel.C_RAW, ms=3.5, label="video, per window")
+    ax1.plot(v["time"], v["theta_ema"], color=accel.C_EMA, lw=2, label="video, smoothed")
+    th_p = np.degrees(np.arctan(at_s / G))
+    ax1.plot(tp[keep], th_p[keep], color=accel.C_FIT, lw=1.6,
+             label="phone  arctan(aT/g)")
     ax1.set_ylabel("fly-out angle  (deg)")
     ax1.legend(loc="upper left", fontsize=9, framealpha=0.9)
     accel.style_axis(ax1)
 
-    tp = ta - lag                                    # phone time on the video clock
-    keep = (tp >= 0) & (tp <= v["time"].max())
     ax2.plot(tp[keep], at[keep], color=accel.C_RAW, lw=0.6, alpha=0.5, label="raw")
     ax2.plot(tp[keep], at_s[keep], color=accel.C_FIT, lw=2, label="smoothed")
     ax2.set_ylabel("acceleration aT  (m/s$^2$)")
