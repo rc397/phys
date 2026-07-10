@@ -20,3 +20,4 @@ output/miachen*
 
 # synced three-view videos are large; regenerate with scripts/synced_video.py
 output/**/*_synced.mp4
+*.volare_motion.npz

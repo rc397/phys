@@ -56,6 +56,53 @@ def lag_for(trial, cam):
     return lag, theta
 
 
+def motion_series(path):
+    # how much of the scene moves, over time: both cameras watch the same ride,
+    # so these curves are near-identical fingerprints and sync the two videos
+    # far more reliably than going through the phone (which misses empty spins).
+    # Cached next to the video because it needs a full decode.
+    cache = os.path.splitext(path)[0] + ".volare_motion.npz"
+    if os.path.exists(cache):
+        z = np.load(cache)
+        return z["t"], z["m"]
+    cap = cv2.VideoCapture(path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    step = max(1, int(round(fps / 8)))
+    ts, ms, prev, fi = [], [], None, -1
+    while True:
+        ok, f = cap.read()
+        if not ok:
+            break
+        fi += 1
+        if fi % step:
+            continue
+        g = cv2.GaussianBlur(cv2.cvtColor(cv2.resize(f, (480, 270)),
+                                          cv2.COLOR_BGR2GRAY), (5, 5), 0)
+        if prev is not None:
+            ts.append(fi / fps)
+            ms.append(int(np.count_nonzero(cv2.absdiff(g, prev) > 16)))
+        prev = g
+    cap.release()
+    t, m = np.array(ts), np.array(ms, float)
+    np.savez_compressed(cache, t=t, m=m)
+    return t, m
+
+
+def video_offset(path_a, path_r):
+    # lag such that ryan_time = alex_time + offset, from the motion fingerprints
+    ta_, ma = motion_series(path_a)
+    tr_, mr = motion_series(path_r)
+    grid = 0.5
+    ga = np.arange(ta_.min(), ta_.max(), grid)
+    gr = np.arange(tr_.min(), tr_.max(), grid)
+    xa = np.interp(ga, ta_, ma)
+    xr = np.interp(gr, tr_, mr)
+    xa = (xa - xa.mean()) / (xa.std() + 1e-9)
+    xr = (xr - xr.mean()) / (xr.std() + 1e-9)
+    c = np.correlate(xr, xa, "full")
+    return (np.argmax(c) - (len(xa) - 1)) * grid + gr[0] - ga[0]
+
+
 class Player:
     # sequential reader that hands out the frame nearest a requested time
     def __init__(self, path):
@@ -114,7 +161,11 @@ def build(trial):
         print(f"trial {trial}: missing pieces, skipped")
         return
     lag_a, th_a = la
-    lag_r, th_r = lr
+    _, th_r = lr
+    # sync the cameras to each other on the ride's motion, then anchor the pair
+    # to the phone through Alex's verified lag
+    off = video_offset(va, vr)
+    lag_r = lag_a - off
 
     a = accel.load(os.path.join(ROOT, "data", ACCEL[trial]))
     ta = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()
