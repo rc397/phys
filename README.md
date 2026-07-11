@@ -19,6 +19,7 @@ scripts/
   volare_angle.py   fly-out angle theta(t) from a ride video, fully automatic
   trial_graphs.py   per-trial report figures: angle + acceleration on a shared clock
   synced_video.py   both cameras + the accelerometer trace playing on one clock
+  synced_sheet.py   per-trial CSV: phone + both cameras on one shared time column
   vidsync.py        that clock: sync anchored on the recordings' own timestamps
   ema.py            EMA-smooth every accelerometer channel, one panel each
   ema_noz.py        EMA of the horizontal magnitude sqrt(ax^2+ay^2)
@@ -27,7 +28,7 @@ data/               the four phone recordings, one per trial
 output/
   angles/           per-video theta(t) plots + CSVs (+ check videos, local only)
   accel/            video-vs-phone overlay per video
-  report/           trial figures + flyout_summary.csv
+  report/           trial figures + flyout_summary.csv + synced-data CSVs
 Videos/             raw footage (not in git - too large)
 ```
 
@@ -95,6 +96,20 @@ time (video and phone side by side) above the rider's acceleration over time, on
 a shared clock. Spans where the ride spins without the phone rider aboard (empty
 warm-up and loading spins) are shaded - the camera sees the ride, the phone in
 the queue does not, so disagreement there is expected rather than error.
+
+## Synced spreadsheet (for Excel)
+
+```bash
+python scripts/synced_sheet.py
+```
+
+writes `output/report/trial N_synced_data.csv` for each trial: the phone
+acceleration and both cameras' fly-out angles resampled onto one shared time
+column (columns `time_s`, `t_from_ride_start_s`, `phone_aT_ms2`,
+`phone_angle_deg`, `alex_video_angle_deg`, `ryan_video_angle_deg`). Every row is
+the same real instant across all three instruments, using the offsets from
+`camera_sync.json`, so it charts directly in Excel with no manual lining-up.
+Cells are blank where a camera was not yet rolling.
 
 ## Synced three-view video
 
