@@ -51,7 +51,10 @@ def ride_window(t, y, thr=5.0, gap=15.0, minlen=30.0):
 
 
 for trial in (1, 2, 3, 4):
-    acsv = angle_csv(trial)
+    alex_hits = glob.glob(os.path.join(ROOT, f"output/angles/*trial {trial}_angle_alex.csv"))
+    ryan_hits = glob.glob(os.path.join(ROOT, f"output/angles/*trial {trial}_angle_ryan.csv"))
+    acsv = alex_hits[0] if alex_hits else (ryan_hits[0] if ryan_hits else None)
+    other_csv = ryan_hits[0] if (alex_hits and ryan_hits) else None
     pcsv = os.path.join(ROOT, "data", ACCEL[trial])
     if not acsv or not os.path.exists(pcsv):
         print(f"trial {trial}: missing data, skipped")
@@ -89,15 +92,25 @@ for trial in (1, 2, 3, 4):
     pt = tp - t0                                      # phone time, ride-relative
     xlo, xhi = -40.0, (t_end - t0) + 40.0
 
-    # top: both angle estimates together - if the physics holds they line up
-    ax1.plot(vt, v["theta"], ".", color=accel.C_RAW, ms=3.5, label="video, per window")
-    ax1.plot(vt, v["theta_ema"], color=accel.C_EMA, lw=2, label="video, smoothed")
+    # top: the angle three ways. the two cameras read differently because of
+    # their viewpoints - Alex looks across the chains (reads low), Ryan looks up
+    # from near under the ride (reads high) - so they BRACKET the phone rather
+    # than sit on it. the phone needs no geometry and is the number to trust;
+    # what all three share is the same rise / plateau / fall, measured
+    # independently - that is the agreement, not the absolute height.
+    ax1.plot(vt, v["theta_ema"], color=accel.C_EMA, lw=2, label=f"video {cam} (reads low)")
+    if other_csv:
+        ov = pd.read_csv(other_csv)
+        off = sync["off_alex_to_ryan"] if sync else 0.0
+        ot = ov["time"].to_numpy() - off - t0                # ryan on the alex clock
+        ax1.plot(ot, ov["theta_ema"], color="#2e8b57", lw=1.8,
+                 label="video ryan (reads high)")
     th_p = np.degrees(np.arctan(at_s / G))
     th_w = np.degrees(np.arctan(at_w / G))
-    ax1.plot(pt[keep], th_p[keep], color=accel.C_FIT, lw=1.0, alpha=0.55,
-             label="phone  arctan(aT/g)")
-    ax1.plot(pt[keep], th_w[keep], color="#123f8f", lw=2.2,
-             label="phone, wave-averaged")
+    ax1.plot(pt[keep], th_w[keep], color="#123f8f", lw=2.6,
+             label="phone (trusted absolute)")
+    ax1.plot(pt[keep], th_p[keep], color=accel.C_FIT, lw=0.9, alpha=0.4,
+             label="phone (with the wave)")
     # the ride also does empty warm-up / re-spins; the phone is in the queue
     # then, so the camera sees an angle while the phone reads flat. shade those
     # so the split doesn't read as a measurement error
