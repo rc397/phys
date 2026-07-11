@@ -22,3 +22,6 @@ output/miachen*
 output/**/*_synced.mp4
 *.volare_motion.npz
 *.volare_flux.npz
+
+# local working notes
+REPORT_NOTES.md
