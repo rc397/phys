@@ -1,10 +1,6 @@
-# Builds a synced side-by-side video per trial: Alex's camera and Ryan's camera
-# playing together on one clock, with the rider's accelerometer trace scrolling
-# underneath and a cursor marking "now". The clocks come from the recordings
-# themselves (phyphox header, the phones' file stamps - resolved in vidsync),
-# so all three views show the same physical moment.
-#   python scripts/synced_video.py            all four trials
-#   python scripts/synced_video.py 2          just trial 2
+# side-by-side synced video per trial: both cameras + the accel trace on
+# one clock (offsets from vidsync).
+#   python scripts/synced_video.py [trial]
 import glob
 import os
 import sys

@@ -1,15 +1,9 @@
-# Measures the fly-out angle of the Volare (chair swing ride) from video, no
-# clicking needed. Force balance on a hanging chair gives tan(theta) = a/g, which is
-# what we compare against the phone accelerometer (arctan(aT/g), since phyphox
-# logs linear acceleration).
-#
-# Rough idea: find the moving chairs with background subtraction, take the
-# outermost blob on each side (that chair is seen side-on so its chain shows the
-# steepest apparent angle), find the chain above its seat, then correct for the
-# camera looking up at the ride.
-#
-#   python volare_angle.py "trial 1.MOV" --annot     writes a check video too
-#   python volare_angle.py --all                     every video in Videos/
+# fly-out angle of the volare from video, no clicking. background-subtract
+# the moving chairs, take the outermost blob each side (side-on chair ->
+# steepest apparent chain), find the chain above the seat, correct for the
+# camera looking up.
+#   python volare_angle.py "trial 1.MOV" --annot
+#   python volare_angle.py --all
 
 import argparse
 import glob
@@ -60,12 +54,8 @@ def angle_from_vertical(d, vref):
 
 
 def deproject(theta_deg, eps_deg):
-    # true fly-out angle from the steepest apparent chain angle. With the camera
-    # raised by eps the steepest-looking chain is one slightly on the near side
-    # (tilted toward the camera), and working through the projection gives
-    #   tan(theta'_max) = sin(theta)/sqrt(cos^2(theta)cos^2(eps) - sin^2(theta)sin^2(eps))
-    # which inverts to tan(theta) = T cos(eps)/sqrt(1 + T^2 sin^2(eps)).
-    # At eps = 0 it reduces to theta = theta'.
+    # steepest apparent chain -> true angle:
+    # tan(theta) = T cos(eps)/sqrt(1 + T^2 sin^2(eps)), T = tan(theta'_max)
     T = np.tan(np.radians(theta_deg))
     e = np.radians(eps_deg)
     return float(np.degrees(np.arctan(T * np.cos(e) / np.sqrt(1 + T * T * np.sin(e) ** 2))))
@@ -80,8 +70,7 @@ def banner(img, lines):
 
 
 def draw_gauge(img, apex, vref, d, ang, dim=False):
-    # vertical ray + rope ray + filled wedge + the angle value; dim = a held
-    # reading being coasted between verified frames
+    # gauge overlay; dim = held reading between verified frames
     import cv2
     wedge = (140, 160, 170) if dim else (60, 200, 255)
     rope = (120, 130, 140) if dim else (40, 150, 255)
@@ -139,8 +128,7 @@ def detect_vertical(bg_gray, exclude, min_len):
 
 
 def auto_calibrate(video, cap, fps, ntot, args):
-    # sample the video to find the ride region and the true vertical (camera
-    # roll). Cached next to the video so reruns skip this, unless --recal.
+    # find the ride region + true vertical once, cache next to the video
     import cv2
     if not args.recal and os.path.exists(sidecar(video)) and os.path.exists(masks_path(video)):
         with open(sidecar(video)) as fh:
@@ -172,8 +160,7 @@ def auto_calibrate(video, cap, fps, ntot, args):
         f1 = cv2.resize(f1, (PROC_W, Hs))
         g0 = cv2.cvtColor(f0, cv2.COLOR_BGR2GRAY)
         g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
-        # blur first: 1-px camera wobble makes every static edge flicker, while
-        # real ride motion covers tens of pixels in 0.2 s and easily survives
+        # blur so 1-px camera wobble doesn't count as motion
         g0b = cv2.GaussianBlur(g0, (5, 5), 0)
         g1b = cv2.GaussianBlur(g1, (5, 5), 0)
         fast_masks.append(cv2.absdiff(g0b, g1b) > 18)
@@ -232,10 +219,7 @@ def auto_calibrate(video, cap, fps, ntot, args):
 
 
 def measure(cap, fps, ntot, cal, args, video, annot_path=None):
-    # the main pass. For every frame, on each side, take the outermost moving
-    # blob (that chair is side-on) and search for its chain in the raw
-    # foreground pixels above the seat. Chair masks are also unioned per time
-    # window; elevation_from_sweep uses those later.
+    # main pass: outermost moving blob per side, chain above its seat
     import cv2
     roi = cal["roi"]
     Hs = roi.shape[0]
@@ -264,15 +248,12 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
     rej = {"few_px": 0, "still": 0, "cam": 0, "few_side": 0, "no_chain": 0,
            "refit": 0, "range": 0, "kept": 0, "held": 0}
     bg_area = max(1, int(np.count_nonzero(roi == 0)))
-    # once a chain is found, keep re-fitting that same chain on later frames
-    # rather than demanding a fresh find every time; a lock lives ~2 s
+    # re-fit a found chain on later frames; a lock lives ~2 s
     lock = {"left": None, "right": None}
     max_hold = max(3, int(round(2.0 * fps / step)))
     rot_streak = 0                                   # rotation must persist to count
     streak_min = max(3, int(round(0.7 * fps / step)))
-    # short-baseline frame difference: riding displaces fully in 0.2 s, while a
-    # cloud-driven lighting change (which floods the background subtractor) barely
-    # registers over that gap, and canopy flutter registers only weakly
+    # 0.2 s frame difference - riding survives it, cloud lighting doesn't
     from collections import deque
     gdeq = deque(maxlen=max(1, int(round(0.2 * fps / step))))
 
@@ -323,9 +304,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
         if len(gdeq) == gdeq.maxlen:
             diff = cv2.absdiff(gb, gdeq[0]) > 18
             fast_mass = int(np.count_nonzero(diff & (roi > 0)))
-            # a fixed camera keeps the background outside the ride still; when a
-            # chunk of it moves, the camera itself is moving and nothing in the
-            # frame can be trusted (this catches packing up at the end of a clip)
+            # background moving = camera moving, drop those frames
             cam_moving = np.count_nonzero(diff & (roi == 0)) > 0.04 * bg_area
         gdeq.append(gb)
         if fi < f_lo or fi < meas_from:
@@ -346,10 +325,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
             annot_frame(small, [], t, "at rest")
             continue
         nlab, lab, stats, cent = cv2.connectedComponentsWithStats(chair, 8)
-        # measuring needs ride-wide motion that persists ~0.7 s (a parked canopy
-        # fluttering in a gust is local and brief); the final flutter-vs-riding
-        # call is made per window in aggregate(), against this video's own
-        # motion level, because flutter moves far fewer pixels than riding
+        # need ride-wide motion persisting ~0.7 s, not a gust on the tent
         big = [i for i in range(1, nlab) if stats[i, cv2.CC_STAT_AREA] >= a_min]
         if big:
             xspread = (max(stats[i, cv2.CC_STAT_LEFT] + stats[i, cv2.CC_STAT_WIDTH]
@@ -378,13 +354,11 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
             bys, bxs = np.where(lab == li)
             by = bys.max()
             bot = np.array([float(np.mean(bxs[bys >= by - 3])), float(by)], np.float32)
-            # typical seat height this frame; median over blobs so one blob that
-            # merged with the canopy can't inflate it
+            # median seat height so a blob merged with the canopy can't inflate it
             hs_all = [stats[i, cv2.CC_STAT_HEIGHT] for i in range(1, nlab)
                       if stats[i, cv2.CC_STAT_AREA] >= a_min]
             h_seat = float(np.clip(np.median(hs_all), 8, 0.12 * roi_h))
-            # rays leave from the seat bottom (the canopy is never below a chair),
-            # skipping past the seat body
+            # rays start at the seat bottom
             L_skip = 0.9 * h_seat
             L_ray = L_skip + 3.5 * h_seat
             nb = ((np.abs(p_r[:, 0] - bot[0]) <= L_ray + 10)
@@ -403,14 +377,12 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
                 on = in_range & (perp <= 3.5)
                 if on.sum() < 10:
                     continue
-                # a real chain fills the ray continuously; a rope that merely
-                # crosses it only fills the crossing point, so score by coverage
+                # a real chain fills the ray continuously, a crossing rope doesn't
                 filled = len(np.unique(((proj[on] - L_skip) // 4).astype(int)))
                 cover = filled / n_bins
                 if cover < 0.55:
                     continue
-                # a chain is also thin: a ray through a dense region (the canopy)
-                # has far more pixels just outside the narrow band
+                # and it's thin - a ray through the canopy fails this
                 wide = in_range & (perp <= 10.0)
                 if wide.sum() > 1.8 * on.sum():
                     continue
@@ -430,9 +402,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
             return ang, pts, np.array([vx, vy], np.float32), np.array([x0, y0], np.float32)
 
         def try_fresh(side):
-            # the extreme chair is the side-on one, but its chain sometimes runs in
-            # front of the canopy where nothing passes the gates - so try the few
-            # outermost chairs (barely less side-on) and keep the steepest result
+            # try the few outermost chairs, keep the steepest that passes
             side_ok = [li for li in range(1, nlab)
                        if stats[li, cv2.CC_STAT_AREA] >= a_min
                        and (cent[li][0] < axis_x if side == "left" else cent[li][0] > axis_x)
@@ -455,8 +425,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
             return max(results, key=lambda r: r[0])
 
         def try_relock(side, st):
-            # the chain found moments ago is still there: re-fit the raw pixels
-            # around its last known line instead of demanding a fresh find
+            # re-fit the raw pixels near the last known line
             dvec, a0 = st["dvec"], st["pt"]
             ylo, yhi = st["ylo"] - 12, st["yhi"] + 12
             pts = None
@@ -478,8 +447,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
                     or yspan < max(15.0, 0.4 * (st["yhi"] - st["ylo"]))
                     or not (3.0 <= ang <= 65.0)):
                 return None
-            # same structural gates as a fresh find, so a lock cannot survive on
-            # a dense region or a few scattered pixels
+            # same gates as a fresh find
             in_y = (p_r[:, 1] >= ylo) & (p_r[:, 1] <= yhi)
             dist = np.abs((p_r - a0) @ nline)
             on = in_y & (dist <= 3.5)
@@ -527,20 +495,15 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
 
 
 def aggregate(meas, sweep_area, activity, a_min, args):
-    # window the raw measurements into apparent theta(t) with a spread band.
-    # Windows where nothing on the ride moved are reported as at rest (theta 0),
-    # so the curve covers the whole video instead of skipping the idle waits.
+    # window into theta(t); idle windows become rest rows (theta 0)
     m = pd.DataFrame(meas, columns=["t", "side", "theta", "agree"])
     act = pd.DataFrame(activity, columns=["t", "px", "rotating"])
     win = args.win
     m["w"] = (m["t"] // win).astype(int)
     act["w"] = (act["t"] // win).astype(int)
     groups = dict(tuple(m.groupby("w")))
-    # genuine riding both moves an order of magnitude more pixels than a parked
-    # canopy fluttering in the breeze, and sweeps out the whole ride annulus
-    # (boarding crowds move plenty of pixels but only paint a small strip).
-    # Judge each window against this video's own riding levels; windows that
-    # fail become rest even if the tent seams produced chain-like readings.
+    # flutter/crowds move far fewer pixels than riding - gate per window
+    # against this video's own levels
     med_px = act.groupby("w")["px"].median()
     px_floor = 0.10 * np.percentile(med_px, 95)
     areas = pd.Series(sweep_area)
@@ -552,14 +515,11 @@ def aggregate(meas, sweep_area, activity, a_min, args):
                          "lo": 0.0, "hi": 0.0, "n": 0, "sides": 0, "rest": 1})
         elif w in groups:
             grp = groups[w]
-            # the statistics use only fresh, fully-gated finds; held re-locks are
-            # for continuity in the check video, not for the numbers
+            # stats use fresh finds only; re-locks are just for the check video
             fresh = grp[grp["agree"] >= 0.99]
             if len(fresh) >= 5:
                 grp = fresh
-            # we want the upper edge of the per-frame distribution (the steepest
-            # apparent angle, which deproject() inverts); chairs at other azimuths
-            # and a side hidden behind scenery only ever drag readings down
+            # keep the upper edge - occlusion only drags readings down
             per_side = grp.groupby("side")["theta"].quantile(0.85)
             rows.append({"time": (w + 0.5) * win,
                          "theta_apparent": float(per_side.max()),
@@ -577,8 +537,7 @@ def aggregate(meas, sweep_area, activity, a_min, args):
 
 
 def fit_lower_arc(cols, bot, Hs):
-    # fit y(x) = y0 + b*sqrt(1-((x-cx)/a)^2) to a lower boundary, dropping
-    # outliers that hang below it. Returns (cx, y0, a, b).
+    # lower-boundary arc fit, dropping outliers hanging below
     from scipy.optimize import least_squares
 
     def arc(p, x):
@@ -605,10 +564,8 @@ def fit_lower_arc(cols, bot, Hs):
 
 
 def elevation_from_sweep(sweeps, df, args):
-    # camera elevation from the swept chair ring, using plateau windows only
-    # (chairs hang lower during the ramp). The union of chair masks is the ring
-    # the chairs sweep out, and its lower boundary is an ellipse arc whose axis
-    # ratio is sin(elevation). Seat size just shifts the arc, not its shape.
+    # elevation from the swept ring: its lower boundary is an ellipse arc
+    # with axis ratio sin(elevation)
     if args.eps is not None:
         return args.eps, "given"
     top = np.percentile(df["theta_apparent"], 85)
@@ -637,8 +594,7 @@ def elevation_from_sweep(sweeps, df, args):
     r_arc = float(np.sqrt(np.mean((bot - arc_y) ** 2)))
     line = np.polyval(np.polyfit(cols, bot, 1), cols)
     r_line = float(np.sqrt(np.mean((bot - line) ** 2)))
-    # if a straight line explains the bottom as well as the arc, the ring's lower
-    # edge is probably hidden behind scenery and the elevation is unreliable
+    # a straight line fitting as well = bottom hidden, elevation unreliable
     conf = "good" if r_line > 1.3 * r_arc else "low (ring bottom may be hidden)"
     return float(np.degrees(np.arcsin(np.clip(b / max(a, 1), 0, 0.75)))), conf
 
@@ -657,8 +613,7 @@ def finish(df, eps, args):
 
 
 def steady_spans(times, plateau, gap=12.0):
-    # merge the scattered steady-state windows (theta within 2.5 deg of p90)
-    # into a few contiguous stretches so they can be shaded as one region
+    # merge plateau windows into contiguous shading spans
     tpl = np.asarray(times)[np.asarray(plateau)]
     if not len(tpl):
         return []
@@ -672,10 +627,7 @@ def steady_spans(times, plateau, gap=12.0):
 
 
 def plot_angle(df, steady, plateau, eps, video, png, show=False):
-    # top: theta(t) with the wave band and the ride phases marked; bottom:
-    # g tan theta. shading the windows the steady mean is averaged over ties
-    # the dashed number to a visible stretch (spin-up and slow-down fall either
-    # side of it), so "steady-state" is not just a line floating on the plot.
+    # theta(t) with the wave band; shade where the steady mean comes from
     if not show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -761,8 +713,7 @@ def accel_compare(res, accel_csv, args):
     at = pd.to_numeric(a[at_col], errors="coerce").to_numpy()
     at_s = accel.ema(at, 2 / 301)
     th_a = np.degrees(np.arctan(at_s / G))
-    # align the clocks: the trial videos sync from their recording stamps
-    # (see vidsync); unknown footage falls back to correlating the curves
+    # clocks from vidsync; unknown footage falls back to correlation
     import vidsync
     grid = 0.5
     tv = df["time"].to_numpy()

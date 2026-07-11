@@ -1,10 +1,5 @@
-# The correlation plot: video tan(theta) against the phone's measured
-# horizontal acceleration a. Resolving forces on a hanging chair (tension
-# along the chain, weight down) with Newton's second law gives
-# T sin(theta) = m a and T cos(theta) = m g, so tan(theta) = a / g -
-# nothing beyond that is assumed. Time pairing comes from the synced
-# per-trial sheets. Rows where the phone reads flat (ride idle / rider not
-# aboard) are dropped: there the video only sees junk.
+# video tan(theta) vs the phone's horizontal acceleration - force balance
+# on the hanging chair says tan(theta) = a/g.
 #   python scripts/angle_vs_accel.py
 import os
 
@@ -26,9 +21,7 @@ pts = {"alex": [[], []], "ryan": [[], []]}
 for n in ("1", "2", "3", "4"):
     d = pd.read_csv(os.path.join(ROOT, "output", "report", f"trial {n}_synced_data.csv"))
     a = d["phone_aT_smooth_ms2"].to_numpy()
-    # ramp-up and plateau only: during the spin-down the chairs (and the
-    # detector) lag the falling acceleration, so those points don't test the
-    # steady-state law. cut at the last moment a is still near its plateau.
+    # ramp-up and plateau only - the chairs lag the falling accel on spin-down
     hold = np.where(a >= 0.85 * np.nanmax(a))[0][-1]
     ok0 = (np.arange(len(a)) <= hold) & (a > 1.5)
     for cam, col in (("alex", "alex_video_angle_deg"), ("ryan", "ryan_video_angle_deg")):

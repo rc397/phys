@@ -1,6 +1,4 @@
-# Report figures: one per trial, angle over time (video) above acceleration over
-# time (phone), on a shared clock. The phone trace is shifted onto the video
-# clock using the recording stamps resolved in vidsync, same as everywhere.
+# per-trial report figure: angle on top, acceleration underneath, one clock.
 #   python trial_graphs.py
 import glob
 import os
@@ -30,8 +28,7 @@ def angle_csv(trial):
 
 
 def ride_window(t, y, thr=5.0, gap=15.0, minlen=30.0):
-    # longest sustained stretch of real acceleration (the loaded run), so the
-    # figure can zero on ride-start and drop the long pre-ride queue recording
+    # longest sustained stretch of real acceleration = the loaded run
     on = np.asarray(y) > thr
     segs, i, n = [], 0, len(t)
     while i < n:
@@ -64,8 +61,7 @@ for trial in (1, 2, 3, 4):
     ta = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()
     at = pd.to_numeric(a[a.columns[4]], errors="coerce").to_numpy()
     at_s = accel.ema(at, 2 / 151)                    # ~1.5 s smoothing at 100 Hz
-    # the rider feels the rotor-tilt wave (a stable ~5-6 s oscillation); average
-    # over it for the line the video should be compared against
+    # average over the ~5-6 s wave for the comparison line
     at_w = pd.Series(at_s).rolling(801, center=True, min_periods=100).mean().to_numpy()
 
     # put the phone on the video clock (same resolved sync as everywhere)
@@ -83,21 +79,14 @@ for trial in (1, 2, 3, 4):
     tp = ta - lag                                    # phone time on the video clock
     keep = (tp >= 0) & (tp <= v["time"].max())
 
-    # zero the clock at ride-start and trim to the ride: the phone was started
-    # back in the queue, minutes before the ride, so the raw timeline is mostly
-    # dead lead-in that buries the part that matters
+    # zero the clock at ride start; the phone recorded for ages in the queue
     ride = ride_window(tp, np.nan_to_num(at_s))
     t0, t_end = ride if ride else (0.0, v["time"].max())
     vt = v["time"].to_numpy() - t0                    # video time, ride-relative
     pt = tp - t0                                      # phone time, ride-relative
     xlo, xhi = -40.0, (t_end - t0) + 40.0
 
-    # top: the angle three ways. the two cameras read differently because of
-    # their viewpoints - Alex looks across the chains (reads low), Ryan looks up
-    # from near under the ride (reads high) - so they BRACKET the phone rather
-    # than sit on it. the phone needs no geometry and is the number to trust;
-    # what all three share is the same rise / plateau / fall, measured
-    # independently - that is the agreement, not the absolute height.
+    # the cameras bracket the phone: alex reads low, ryan high (viewpoints)
     ax1.plot(vt, v["theta_ema"], color=accel.C_EMA, lw=2, label=f"video {cam} (reads low)")
     if other_csv:
         ov = pd.read_csv(other_csv)
@@ -111,9 +100,7 @@ for trial in (1, 2, 3, 4):
              label="phone (trusted absolute)")
     ax1.plot(pt[keep], th_p[keep], color=accel.C_FIT, lw=0.9, alpha=0.4,
              label="phone (with the wave)")
-    # the ride also does empty warm-up / re-spins; the phone is in the queue
-    # then, so the camera sees an angle while the phone reads flat. shade those
-    # so the split doesn't read as a measurement error
+    # shade where the ride spins without the phone rider aboard
     ph_on_grid = np.interp(vt, pt[keep], th_p[keep], left=0, right=0)
     solo = (v["theta_ema"].to_numpy() > 15) & (ph_on_grid < 5)
     if solo.any():

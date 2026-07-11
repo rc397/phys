@@ -1,8 +1,5 @@
-# Build one synced spreadsheet per trial: the phone acceleration and both
-# cameras' fly-out angles resampled onto a single shared time column, using
-# the offsets in output/report/camera_sync.json. Every row is the same real
-# instant across all three instruments, so it charts straight in Excel with
-# no manual lining-up. Missing cells (a camera wasn't rolling yet) are blank.
+# one csv per trial: phone + both cameras on a shared time column (offsets
+# from camera_sync.json), so it charts straight in excel.
 #   python scripts/synced_sheet.py
 import glob
 import json
@@ -28,8 +25,7 @@ def angle_csv(trial, cam):
 
 
 def ride_start(tp, aT):
-    # first moment of the longest sustained flying stretch (aT high), so t_ride
-    # is measured from when the actual ride spins up, not a stray early spike
+    # start of the longest sustained flying stretch = ride start
     th = np.degrees(np.arctan(accel.ema(aT, 2 / 301) / G))
     g = np.arange(tp.min(), tp.max(), 0.1)
     on = np.interp(g, tp, np.nan_to_num(th)) > 15
@@ -102,9 +98,7 @@ for n in ("1", "2", "3", "4"):
     out_path = os.path.join(outdir, f"trial {n}_synced_data.csv")
     out.to_csv(out_path, index=False)
 
-    # full-resolution companion: every original phyphox sample kept, with time
-    # columns that place it on the phone clock, either camera's clock, or
-    # seconds-from-ride-start - so the raw 100 Hz data aligns without decimation
+    # full-resolution copy: every phyphox sample, a few useful time columns
     raw = pd.DataFrame({
         "time_phone_s": np.round(tp, 4),
         "t_from_ride_start_s": np.round(tp - t_ride, 4),

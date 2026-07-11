@@ -1,5 +1,4 @@
-# Shared helpers for the accelerometer scripts: load phyphox csv, EMA, plot styling,
-# output paths. Imported by ema.py and ema_noz.py.
+# shared helpers for the accelerometer scripts
 
 import argparse
 import os
@@ -7,26 +6,22 @@ import os
 import numpy as np
 import pandas as pd
 
-# Default EMA span. Higher = smoother; alpha = 2 / (span + 1).
 SMOOTHING = 40
 
-# House style, shared by every plot so the figures look like one project.
-C_RAW = "#9aa0a6"      # raw trace (grey)
-C_EMA = "#c0392b"      # smoothed trace (red)
-C_FIT = "#1f6fd6"      # fitted/model overlay (blue)
+C_RAW = "#9aa0a6"
+C_EMA = "#c0392b"
+C_FIT = "#1f6fd6"
 C_GRID = "#ededed"
 C_ZERO = "#b0b0b0"
 
 
 def load(path):
-    """Read a phyphox-style CSV, sniffing the delimiter and dropping comments."""
     df = pd.read_csv(path, sep=None, engine="python", comment="#", skip_blank_lines=True)
     df.columns = [str(c).strip() for c in df.columns]
     return df
 
 
 def find_time(df):
-    """Return the name of the time column, or None if there isn't an obvious one."""
     for c in df.columns:
         if c.lower().startswith("time") or c.lower() in ("t", "t (s)", "t(s)"):
             return c
@@ -37,18 +32,16 @@ def find_time(df):
 
 
 def find_signals(df, time_col):
-    """Numeric data columns (everything mostly-numeric that isn't the time axis)."""
     return [c for c in df.columns
             if c != time_col and pd.to_numeric(df[c], errors="coerce").notna().mean() > 0.5]
 
 
 def pick_axis(cols, axis):
-    """Find the ax / ay / az column for a given axis letter ('x', 'y', 'z')."""
     import re
     for c in cols:
-        if c.lower().replace(" ", "").startswith("a" + axis):     # ax, ay, az
+        if c.lower().replace(" ", "").startswith("a" + axis):
             return c
-    for c in cols:                                                # fallback: stray axis token, never the total
+    for c in cols:
         n = c.lower()
         if "total" not in n and re.search(rf"(^|[^a-z]){axis}([^a-z]|$)", n):
             return c
@@ -56,15 +49,13 @@ def pick_axis(cols, axis):
 
 
 def time_axis(df, time_col):
-    """(t array, xlabel). Falls back to the sample index when there's no time column."""
     if time_col:
         return pd.to_numeric(df[time_col], errors="coerce").to_numpy(), time_col
     return np.arange(len(df), dtype=float), "sample"
 
 
 def ema(x, alpha):
-    """Exponential moving average: y_t = a*x_t + (1-a)*y_(t-1), seeded with the
-    first sample. NaNs hold the previous value instead of poisoning the run."""
+    # NaNs hold the previous value instead of poisoning the rest
     y = np.empty(len(x))
     prev = None
     for i, v in enumerate(x):
@@ -77,8 +68,6 @@ def ema(x, alpha):
 
 
 def active_window(t, mag, pad=3.0, level=0.015, smooth_s=2.0, gap_s=10.0):
-    """Find [start, end] of the active ride from the envelope of |mag|, bridging
-    brief quiet dips so a momentary lull doesn't cut the ride short."""
     dt = np.nanmedian(np.diff(t))
     if not np.isfinite(dt) or dt <= 0:
         dt = 1.0
@@ -86,7 +75,7 @@ def active_window(t, mag, pad=3.0, level=0.015, smooth_s=2.0, gap_s=10.0):
     env = pd.Series(np.abs(np.nan_to_num(mag))).rolling(w, center=True, min_periods=1).mean().to_numpy()
     base, peak = np.nanpercentile(env, 10), np.nanmax(env)
     active = env > base + level * (peak - base)
-    gap = max(1, int(round(gap_s / dt)))      # only a sustained quiet stretch ends the ride
+    gap = max(1, int(round(gap_s / dt)))
     pk = int(np.nanargmax(env))
 
     def edge(step):
@@ -106,7 +95,6 @@ def active_window(t, mag, pad=3.0, level=0.015, smooth_s=2.0, gap_s=10.0):
 
 
 def add_common_args(ap):
-    """Attach the smoothing / trimming / output flags shared by the EMA scripts."""
     ap.add_argument("file", nargs="?", default="acceleration_data.csv")
     ap.add_argument("-n", "--span", type=int, default=SMOOTHING, help="EMA span; alpha = 2/(N+1)")
     ap.add_argument("-a", "--alpha", type=float, help="alpha directly (0-1), overrides --span")
@@ -119,7 +107,6 @@ def add_common_args(ap):
 
 
 def resolve_alpha(args):
-    """Turn --span / --alpha into (alpha, human-readable tag), validating ranges."""
     if args.alpha is not None:
         if not 0 < args.alpha <= 1:
             raise SystemExit("alpha must be between 0 and 1")
@@ -131,13 +118,6 @@ def resolve_alpha(args):
 
 
 def out_paths_for(out, outdir, here, infile, suffix):
-    """Resolve (png, csv) output paths, making the output dir as needed.
-
-    out      -- exact PNG path (-o), or None to derive a name
-    outdir   -- output folder, or None for ./output beside the scripts
-    infile   -- the input whose basename seeds the derived name
-    suffix   -- appended to that basename, e.g. '_ema' -> '1st_Trial_ema.png'
-    """
     if out:
         png = out
         csv = os.path.splitext(out)[0] + ".csv"
@@ -151,11 +131,9 @@ def out_paths_for(out, outdir, here, infile, suffix):
 
 
 def out_paths(args, here, suffix):
-    """(png, csv) for the EMA scripts, driven by args.out / args.outdir / args.file."""
     return out_paths_for(args.out, args.outdir, here, args.file, suffix)
 
 
 def style_axis(ax):
-    """Light grid + drop the top/right spines, the look used across the project."""
     ax.grid(True, color=C_GRID, lw=0.6)
     ax.spines[["top", "right"]].set_visible(False)

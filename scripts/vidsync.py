@@ -1,23 +1,7 @@
-# Clock alignment between the three instruments. Correlating the video
-# signals blind is treacherous: the ride is periodic, so a cross-correlation
-# happily locks a rotation (or a spin cycle) off, and the two viewpoints see
-# the chair bunching at different rotation phases, which biases even the
-# "right" peak by seconds. The sync is therefore layered:
-#   coarse - the recording clocks. Each phyphox CSV states its start time;
-#           ryan's phone stamps every mp4 at recording STOP (mvhd, UTC), so
-#           start = stop - duration (trial 1 agrees with the phone to 0.1 s);
-#           alex's iPhone writes the start into each MOV as
-#           com.apple.quicktime.creationdate, on a clock that ran a constant
-#           ~41 s fast that day (fitted out across the trials).
-#   fine  - audio. Both phones hear the same PA and crowd transients, so the
-#           onset-strength (spectral flux) of the two soundtracks is voted in
-#           short chunks; a dominant vote cluster pins the offset to ~0.1 s
-#           with no viewpoint effects at all. A trial without a dominant
-#           cluster falls back to the stamps.
-# The resolved table is cached in output/report/camera_sync.json so figures
-# can be rebuilt without the footage. The shipped table's trials 3 and 4 had
-# thin audio margins and were confirmed frame-by-frame against the rotor
-# lift before being pinned.
+# clock sync between the phone and the two cameras. coarse from the files'
+# own recording timestamps (alex's iphone clock ran ~41s fast that day, fitted
+# out), fine from correlating the two soundtracks. cached in
+# output/report/camera_sync.json - trials 3+4 pinned after frame-checking.
 import datetime
 import glob
 import json
@@ -37,11 +21,9 @@ PHONE = {1: "1st Trial.csv", 2: "2nd Trial.csv", 3: "3rd Trial.csv", 4: "4th Tri
 
 
 def xcorr_lag(t1, s1, t2, s2, grid=0.5, centre=None, span=None):
-    # lag such that series2_time = series1_time + lag. Constrained mode scores
-    # each candidate by the pearson r of the overlap, so a lag with more
-    # overlap can't beat a lag with better agreement (matters for signals that
-    # are mostly plateau); it also keeps a periodic signal from locking a
-    # cycle off. Unconstrained mode is the plain full correlation.
+    # lag such that series2_time = series1_time + lag. give centre+span to
+    # search only near an expected value (uses pearson r so overlap length
+    # doesn't win over actual agreement)
     g1 = np.arange(t1.min(), t1.max(), grid)
     g2 = np.arange(t2.min(), t2.max(), grid)
     x1 = np.interp(g1, t1, s1)
@@ -87,10 +69,8 @@ def _atoms(f, start, end):
 
 
 def recording_span(path):
-    # what the container remembers about the recording, as
-    # (kind, when, duration_s): kind "start" means `when` is the local wall
-    # clock at record-start (iPhone creation date); "stop_utc" means `when`
-    # is UTC at record-stop (androids stamp mvhd when finalising the file)
+    # (kind, when, duration_s) from the mp4/mov metadata. iphones store the
+    # local start time, androids stamp mvhd in UTC when recording stops
     size = os.path.getsize(path)
     with open(path, "rb") as f:
         moov = next(((p, s) for p, s, h, t in _atoms(f, 0, size) if t == b"moov"), None)
@@ -115,7 +95,7 @@ def recording_span(path):
 
 
 def phone_recording(n):
-    # (wall-clock start, loaded-run span in CSV seconds) for a trial's log
+    # phyphox states its start time in the csv header
     path = os.path.join(ROOT, "data", PHONE[n])
     start = None
     with open(path, encoding="utf-8", errors="ignore") as f:
@@ -161,9 +141,7 @@ def _theta_curve(cam, n):
 
 
 def _flux(video):
-    # onset strength of the soundtrack (spectral flux, 100 Hz); cached because
-    # it needs the audio decoded. Slow trends are removed so only the shared
-    # transients (PA, horns, screams) count.
+    # onset strength of the soundtrack at 100 Hz, cached next to the video
     cache = os.path.splitext(video)[0] + ".volare_flux.npz"
     if os.path.exists(cache):
         return np.load(cache)["f"]
@@ -188,10 +166,8 @@ def _flux(video):
 
 
 def audio_offset(va, vr, centre, span=16.0):
-    # vote the offset in short audio chunks: each chunk's best correlation lag
-    # is one vote, and a real acoustic lock shows as a tight cluster. Returns
-    # (offset, cluster votes, runner-up votes); None if the soundtracks never
-    # agree (two far-apart mics mostly hear their own local crowd).
+    # each audio chunk votes for its best lag; a real lock is a tight cluster.
+    # returns (offset, cluster votes, runner-up votes) or None
     try:
         fa, fr = _flux(va), _flux(vr)
     except Exception:
@@ -251,8 +227,7 @@ def resolve(force=False, quiet=False):
     spans = {k: recording_span(v) for k, v in vids.items()}
     phones = {n: phone_recording(n) for n in (1, 2, 3, 4)}
 
-    # ryan's stamps are UTC; find the one half-hour timezone that puts every
-    # trial's phone run inside his recording window
+    # ryan's stamps are UTC - find the timezone that fits all four trials
     tz = None
     for cand in range(-12 * 3600, 14 * 3600 + 1, 1800):
         ok = True
@@ -280,9 +255,8 @@ def resolve(force=False, quiet=False):
         _, stop, dur = spans[("ryan", n)]
         ryan_start[n] = stop + datetime.timedelta(seconds=tz - dur)
 
-    # alex's stamps are recording starts on a clock that runs a constant bit
-    # fast; the capped angle envelopes give a first content-based estimate of
-    # each offset, and the audio voting then pins whichever trials it can
+    # alex's clock skew is constant, so fit it across the trials; the angle
+    # envelopes give a rough offset first, audio then pins what it can
     d0, env = {}, {}
     for n in (1, 2, 3, 4):
         kind, start, _ = spans[("alex", n)]
@@ -310,8 +284,6 @@ def resolve(force=False, quiet=False):
         if n in locked:
             off, src = locked[n], "audio"
         else:
-            # no acoustic consensus - the stamps stand, but a single bad stop
-            # stamp can be seconds off, so say so out loud
             off, src = pred, "stamps"
             hint = (f" (best cluster {audio[n][0]:+.1f}, {audio[n][1]} v "
                     f"{audio[n][2]} votes)") if audio[n] else ""
@@ -338,8 +310,6 @@ def resolve(force=False, quiet=False):
 
 
 def trial_sync(n):
-    # the resolved sync row for a trial, with absolute video paths; None if
-    # the table can't be built (no cache and no footage)
     table = resolve(quiet=True)
     if not table or str(n) not in table["trials"]:
         return None
@@ -350,8 +320,7 @@ def trial_sync(n):
 
 
 def video_lag(video):
-    # phone_time = video_time + lag for one of the trial videos; None for
-    # footage outside the sync table
+    # phone_time = video_time + lag, or None for unknown footage
     m = re.search(r"trial (\d)", os.path.basename(video).lower())
     if not m:
         return None
