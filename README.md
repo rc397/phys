@@ -7,9 +7,11 @@ fairground ride (the *Volare*, a wave swinger) from two independent sources:
 2. **Video** of the ride (two cameras) - the chains' fly-out angle θ(t), measured
    automatically frame by frame.
 
-The physics linking them: the ride is a conical pendulum, so at fly-out angle θ
-from vertical, **tan θ = a_horizontal / g**. The videos give θ independently of the
-phone, so the model is tested rather than assumed. (The phone logs are linear
+The physics linking them is a force balance on a hanging chair (year 11 kit,
+no circular motion needed): the chain tension and the weight resolve to
+**T sin θ = m a** and **T cos θ = m g**, so **tan θ = a / g** with a the
+measured horizontal acceleration. The videos give θ independently of the
+phone, so the relation is tested rather than assumed. (The phone logs linear
 acceleration, so on the rider **θ_accel = arctan(aT / g)** at steady state.)
 
 ## Layout
@@ -102,10 +104,9 @@ python scripts/angle_vs_accel.py
 ```
 
 writes `output/report/tan_theta_vs_accel.png`: video tan θ against the phone's
-centripetal acceleration, ramp-up and plateau, all trials pooled. Since
-a = v²/r this is the angle-versus-v² test with the radius factored out; the
-conical-pendulum line tan θ = a/g should (and does) run between the two
-cameras' clouds, whose fitted slopes bracket 1/g.
+measured horizontal acceleration, ramp-up and plateau, all trials pooled. The
+force-balance line tan θ = a/g should (and does) run between the two cameras'
+clouds, whose fitted slopes bracket 1/g.
 
 ## Synced spreadsheet (for Excel)
 
@@ -187,6 +188,6 @@ systematic is each camera's elevation estimate, worth several degrees on the
 absolute angle (Alex's camera reads low, Ryan's high, the phone in between).
 Across four trials and three instruments the steady fly-out is **θ ≈ 50 ± 4°**,
 giving a horizontal acceleration of **g·tan θ ≈ 11-13 m/s²**, consistent with
-the conical-pendulum model. Brief wind gusts can still leave an isolated spurious
-window or two during idle stretches; the phone trace beside the curve makes them
-obvious.
+the tan θ = a/g force balance. Brief wind gusts can still leave an isolated
+spurious window or two during idle stretches; the phone trace beside the curve
+makes them obvious.

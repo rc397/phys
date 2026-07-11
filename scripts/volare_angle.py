@@ -1,5 +1,5 @@
 # Measures the fly-out angle of the Volare (chair swing ride) from video, no
-# clicking needed. The ride is a conical pendulum so tan(theta) = a/g, which is
+# clicking needed. Force balance on a hanging chair gives tan(theta) = a/g, which is
 # what we compare against the phone accelerometer (arctan(aT/g), since phyphox
 # logs linear acceleration).
 #

@@ -1,9 +1,10 @@
-# The correlation plot: video tan(theta) against the phone's centripetal
-# acceleration a. For a conical pendulum tan(theta) = a/g, and since a = v^2/r
-# this is the angle-vs-velocity-squared test with the radius factored out -
-# no ride geometry needed, everything on the plot is measured. Time pairing
-# comes from the synced per-trial sheets. Rows where the phone reads flat
-# (ride idle / rider not aboard) are dropped: there the video only sees junk.
+# The correlation plot: video tan(theta) against the phone's measured
+# horizontal acceleration a. Resolving forces on a hanging chair (tension
+# along the chain, weight down) with Newton's second law gives
+# T sin(theta) = m a and T cos(theta) = m g, so tan(theta) = a / g -
+# nothing beyond that is assumed. Time pairing comes from the synced
+# per-trial sheets. Rows where the phone reads flat (ride idle / rider not
+# aboard) are dropped: there the video only sees junk.
 #   python scripts/angle_vs_accel.py
 import os
 
@@ -40,7 +41,7 @@ for n in ("1", "2", "3", "4"):
         ax.plot(x[::4], y[::4], MARKS[n], color=color, ms=3, alpha=0.25)
 
 xs = np.linspace(0, 17, 50)
-ax.plot(xs, xs / G, color="#123f8f", lw=2.4, label="conical pendulum:  tan θ = a / g")
+ax.plot(xs, xs / G, color="#123f8f", lw=2.4, label="force balance:  tan θ = a / g")
 for cam, color in (("alex", accel.C_EMA), ("ryan", "#2e8b57")):
     x = np.concatenate(pts[cam][0])
     y = np.concatenate(pts[cam][1])
@@ -49,13 +50,13 @@ for cam, color in (("alex", accel.C_EMA), ("ryan", "#2e8b57")):
             label=f"video {cam} fit:  slope {slope:.4f}  (1/g = {1 / G:.4f})")
     ax.plot([], [], "o", color=color, ms=5, alpha=0.6, label=f"video {cam}, all trials")
 
-ax.set_xlabel("phone centripetal acceleration  a = v$^2$/r  (m/s$^2$)")
+ax.set_xlabel("phone horizontal acceleration  a  (m/s$^2$)")
 ax.set_ylabel("tan θ   (video fly-out angle)")
 ax.set_xlim(0, 17)
 ax.set_ylim(0, 2.4)
 ax.legend(fontsize=9, loc="upper left")
 accel.style_axis(ax)
-ax.set_title("Fly-out angle vs acceleration (∝ v²): the conical-pendulum test",
+ax.set_title("Fly-out angle vs measured acceleration: the tan θ = a/g test",
              fontsize=12, fontweight="bold")
 out = os.path.join(ROOT, "output", "report", "tan_theta_vs_accel.png")
 fig.savefig(out, dpi=150)
