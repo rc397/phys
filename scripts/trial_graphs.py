@@ -29,6 +29,27 @@ def angle_csv(trial):
     return None
 
 
+def ride_window(t, y, thr=5.0, gap=15.0, minlen=30.0):
+    # longest sustained stretch of real acceleration (the loaded run), so the
+    # figure can zero on ride-start and drop the long pre-ride queue recording
+    on = np.asarray(y) > thr
+    segs, i, n = [], 0, len(t)
+    while i < n:
+        if on[i]:
+            j = i
+            while j + 1 < n and on[j + 1]:
+                j += 1
+            if not segs or t[i] - segs[-1][1] > gap:
+                segs.append([t[i], t[j]])
+            else:
+                segs[-1][1] = t[j]
+            i = j + 1
+        else:
+            i += 1
+    segs = [s for s in segs if s[1] - s[0] > minlen]
+    return max(segs, key=lambda s: s[1] - s[0]) if segs else None
+
+
 for trial in (1, 2, 3, 4):
     acsv = angle_csv(trial)
     pcsv = os.path.join(ROOT, "data", ACCEL[trial])
@@ -59,29 +80,37 @@ for trial in (1, 2, 3, 4):
     tp = ta - lag                                    # phone time on the video clock
     keep = (tp >= 0) & (tp <= v["time"].max())
 
+    # zero the clock at ride-start and trim to the ride: the phone was started
+    # back in the queue, minutes before the ride, so the raw timeline is mostly
+    # dead lead-in that buries the part that matters
+    ride = ride_window(tp, np.nan_to_num(at_s))
+    t0, t_end = ride if ride else (0.0, v["time"].max())
+    vt = v["time"].to_numpy() - t0                    # video time, ride-relative
+    pt = tp - t0                                      # phone time, ride-relative
+    xlo, xhi = -40.0, (t_end - t0) + 40.0
+
     # top: both angle estimates together - if the physics holds they line up
-    ax1.plot(v["time"], v["theta"], ".", color=accel.C_RAW, ms=3.5, label="video, per window")
-    ax1.plot(v["time"], v["theta_ema"], color=accel.C_EMA, lw=2, label="video, smoothed")
+    ax1.plot(vt, v["theta"], ".", color=accel.C_RAW, ms=3.5, label="video, per window")
+    ax1.plot(vt, v["theta_ema"], color=accel.C_EMA, lw=2, label="video, smoothed")
     th_p = np.degrees(np.arctan(at_s / G))
     th_w = np.degrees(np.arctan(at_w / G))
-    ax1.plot(tp[keep], th_p[keep], color=accel.C_FIT, lw=1.0, alpha=0.55,
+    ax1.plot(pt[keep], th_p[keep], color=accel.C_FIT, lw=1.0, alpha=0.55,
              label="phone  arctan(aT/g)")
-    ax1.plot(tp[keep], th_w[keep], color="#123f8f", lw=2.2,
+    ax1.plot(pt[keep], th_w[keep], color="#123f8f", lw=2.2,
              label="phone, wave-averaged")
     # the ride also does empty warm-up / re-spins; the phone is in the queue
     # then, so the camera sees an angle while the phone reads flat. shade those
     # so the split doesn't read as a measurement error
-    ph_on_grid = np.interp(v["time"], tp[keep], th_p[keep], left=0, right=0)
+    ph_on_grid = np.interp(vt, pt[keep], th_p[keep], left=0, right=0)
     solo = (v["theta_ema"].to_numpy() > 15) & (ph_on_grid < 5)
     if solo.any():
-        tarr = v["time"].to_numpy()
         start = None
         first = True
         for i, s in enumerate(solo):
             if s and start is None:
-                start = tarr[i]
+                start = vt[i]
             if (not s or i == len(solo) - 1) and start is not None:
-                ax1.axvspan(start, tarr[i], color="#bbbbbb", alpha=0.18,
+                ax1.axvspan(start, vt[i], color="#bbbbbb", alpha=0.18,
                             label="ride spinning, phone not on it" if first else None)
                 first = False
                 start = None
@@ -89,13 +118,13 @@ for trial in (1, 2, 3, 4):
     ax1.legend(loc="upper left", fontsize=9, framealpha=0.9)
     accel.style_axis(ax1)
 
-    ax2.plot(tp[keep], at[keep], color=accel.C_RAW, lw=0.6, alpha=0.5, label="raw")
-    ax2.plot(tp[keep], at_s[keep], color=accel.C_FIT, lw=1.2, alpha=0.7,
+    ax2.plot(pt[keep], at[keep], color=accel.C_RAW, lw=0.6, alpha=0.5, label="raw")
+    ax2.plot(pt[keep], at_s[keep], color=accel.C_FIT, lw=1.2, alpha=0.7,
              label="smoothed (the wave)")
-    ax2.plot(tp[keep], at_w[keep], color="#123f8f", lw=2.2, label="wave-averaged")
+    ax2.plot(pt[keep], at_w[keep], color="#123f8f", lw=2.2, label="wave-averaged")
     ax2.set_ylabel("acceleration aT  (m/s$^2$)")
-    ax2.set_xlabel("time (s)")
-    ax2.set_xlim(0, v["time"].max())
+    ax2.set_xlabel("time from ride start (s)")
+    ax2.set_xlim(xlo, xhi)
     ax2.legend(loc="upper left", fontsize=9, framealpha=0.9)
     accel.style_axis(ax2)
 
