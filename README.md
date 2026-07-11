@@ -114,6 +114,19 @@ same real instant across all three instruments, using the offsets from
 `camera_sync.json`, so it charts directly in Excel with no manual lining-up.
 Cells are blank where a camera was not yet rolling.
 
+A full-resolution companion `trial N_phone_aligned_100hz.csv` keeps every
+original phyphox sample (no decimation) with `time_phone_s`,
+`t_from_ride_start_s`, `time_on_alex_video_s`, `time_on_ryan_video_s` and the
+raw `ax/ay/az/aT`, for when the coarser shared grid is not enough.
+
+The alignment is checked, not asserted: `sync_check_curves.png` overlays the
+three angle columns per trial (they rise and plateau together), and
+`sync_check_frames.jpg` shows that at each trial's peak phone acceleration both
+cameras are at full fly-out. The phone reads "flying" over a slightly wider
+window than the cameras because its acceleration collapses the instant the ride
+slows while the chairs keep swinging on the coast-down - a real difference
+between the instruments, not a timing error.
+
 ## Synced three-view video
 
 ```bash

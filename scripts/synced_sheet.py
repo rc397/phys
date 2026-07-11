@@ -101,6 +101,19 @@ for n in ("1", "2", "3", "4"):
     })
     out_path = os.path.join(outdir, f"trial {n}_synced_data.csv")
     out.to_csv(out_path, index=False)
+
+    # full-resolution companion: every original phyphox sample kept, with time
+    # columns that place it on the phone clock, either camera's clock, or
+    # seconds-from-ride-start - so the raw 100 Hz data aligns without decimation
+    raw = pd.DataFrame({
+        "time_phone_s": np.round(tp, 4),
+        "t_from_ride_start_s": np.round(tp - t_ride, 4),
+        "time_on_alex_video_s": np.round(tp - lag_a, 4),
+        "time_on_ryan_video_s": np.round(tp - lag_r, 4),
+        "ax_ms2": comp["ax"], "ay_ms2": comp["ay"],
+        "az_ms2": comp["az"], "aT_ms2": comp["aT"],
+    })
+    raw.to_csv(os.path.join(outdir, f"trial {n}_phone_aligned_100hz.csv"), index=False)
     cov_a = int(np.isfinite(out["alex_video_angle_deg"]).sum())
     cov_r = int(np.isfinite(out["ryan_video_angle_deg"]).sum())
     print(f"trial {n}: {out_path}")
