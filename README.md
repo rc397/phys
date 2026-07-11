@@ -106,16 +106,20 @@ writes `output/report/trial N_synced.mp4`: both cameras playing side by side on
 one clock with the rider's accelerometer trace scrolling underneath and a cursor
 marking the current moment. Large files, kept local.
 
-**How the clocks line up** (`scripts/vidsync.py`): correlating the signals blind
-is unreliable here - the ride is periodic, so a cross-correlation happily locks
-a whole rotation (or a whole spin cycle) off, which is exactly what an earlier
-version did. The sync instead comes from the recordings themselves: each phyphox
-log states when it started, Ryan's phone stamps every mp4 when recording stops,
-and Alex's iPhone writes the recording start into each MOV (that clock ran ~43 s
-fast on the day; the constant is fitted out). Correlating the two cameras' angle
-envelopes is only trusted within a few seconds of what the stamps predict. The
-resolved table lives in `output/report/camera_sync.json`; on trial 1 the stamp
-arithmetic and the content agree to 0.1 s.
+**How the clocks line up** (`scripts/vidsync.py`): correlating the video signals
+blind is unreliable here - the ride is periodic, so a cross-correlation happily
+locks a whole rotation (or a whole spin cycle) off, which is exactly what an
+earlier version did. The sync is layered instead. Coarse: the recordings' own
+clocks - each phyphox log states when it started, Ryan's phone stamps every mp4
+when recording stops, and Alex's iPhone writes the recording start into each MOV
+(that clock ran a constant ~41 s fast on the day; fitted out). Fine: audio -
+both cameras hear the same PA and crowd transients, so the soundtracks' onset
+patterns are correlated in short chunks and a dominant vote cluster pins the
+offset to ~0.1 s with no viewpoint effects (re-deriving this needs
+`imageio-ffmpeg` for the audio decode). Trials whose audio vote was ambiguous
+were confirmed frame-by-frame against the rotor's spin-up lift before being
+pinned. The resolved table lives in `output/report/camera_sync.json`, marked
+per trial with which source decided it.
 
 ## Accelerometer-only plots
 

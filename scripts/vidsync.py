@@ -1,21 +1,23 @@
-# Clock alignment between the three instruments. Correlating the signals
-# blind turned out to be treacherous: the ride is periodic, so an
-# unconstrained cross-correlation happily locks a rotation (or a whole spin
-# cycle) off, and the two viewpoints see the chair bunching at different
-# rotation phases, which biases even the "right" peak by several seconds.
-# So the anchors are the recording clocks instead:
-#   phone - each phyphox CSV states "Recording started at:" in its header
-#   ryan  - his phone stamps the mp4 when the recording STOPS (mvhd, UTC);
-#           start = stop - duration. Trial 1 agrees with the phone to 0.1 s.
-#   alex  - his iPhone writes the recording start into the MOV as
-#           com.apple.quicktime.creationdate (local time), but that clock ran
-#           ~45 s fast on the day. The offset is the same for all four files,
-#           so it is fitted from the footage and the stamps together.
-# Correlation is only used inside a small window of what the stamps predict:
-# the capped angle curves (ramps and stops count, plateau ripple doesn't) fit
-# alex's clock offset and may refine a trial by a few seconds, never more.
+# Clock alignment between the three instruments. Correlating the video
+# signals blind is treacherous: the ride is periodic, so a cross-correlation
+# happily locks a rotation (or a spin cycle) off, and the two viewpoints see
+# the chair bunching at different rotation phases, which biases even the
+# "right" peak by seconds. The sync is therefore layered:
+#   coarse - the recording clocks. Each phyphox CSV states its start time;
+#           ryan's phone stamps every mp4 at recording STOP (mvhd, UTC), so
+#           start = stop - duration (trial 1 agrees with the phone to 0.1 s);
+#           alex's iPhone writes the start into each MOV as
+#           com.apple.quicktime.creationdate, on a clock that ran a constant
+#           ~41 s fast that day (fitted out across the trials).
+#   fine  - audio. Both phones hear the same PA and crowd transients, so the
+#           onset-strength (spectral flux) of the two soundtracks is voted in
+#           short chunks; a dominant vote cluster pins the offset to ~0.1 s
+#           with no viewpoint effects at all. A trial without a dominant
+#           cluster falls back to the stamps.
 # The resolved table is cached in output/report/camera_sync.json so figures
-# can be rebuilt without the footage.
+# can be rebuilt without the footage. The shipped table's trials 3 and 4 had
+# thin audio margins and were confirmed frame-by-frame against the rotor
+# lift before being pinned.
 import datetime
 import glob
 import json
@@ -158,6 +160,83 @@ def _theta_curve(cam, n):
     return t, th
 
 
+def _flux(video):
+    # onset strength of the soundtrack (spectral flux, 100 Hz); cached because
+    # it needs the audio decoded. Slow trends are removed so only the shared
+    # transients (PA, horns, screams) count.
+    cache = os.path.splitext(video)[0] + ".volare_flux.npz"
+    if os.path.exists(cache):
+        return np.load(cache)["f"]
+    import subprocess
+    import tempfile
+    import imageio_ffmpeg
+    from scipy.io import wavfile
+    from scipy.signal import stft
+    wav = os.path.join(tempfile.gettempdir(), os.path.basename(video) + ".wav")
+    subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-v", "error", "-i",
+                    video, "-vn", "-ac", "1", "-ar", "8000", "-f", "wav", wav],
+                   check=True)
+    fs, x = wavfile.read(wav)
+    os.remove(wav)
+    f, t, S = stft(x.astype(np.float64), fs=8000, nperseg=512,
+                   noverlap=512 - 80, padded=False)
+    m = np.abs(S[(f >= 400) & (f <= 3000)])
+    fl = np.log1p(np.maximum(np.diff(m, axis=1), 0).sum(axis=0))
+    fl = fl - pd.Series(fl).rolling(300, center=True, min_periods=1).mean().to_numpy()
+    np.savez_compressed(cache, f=fl)
+    return fl
+
+
+def audio_offset(va, vr, centre, span=16.0):
+    # vote the offset in short audio chunks: each chunk's best correlation lag
+    # is one vote, and a real acoustic lock shows as a tight cluster. Returns
+    # (offset, cluster votes, runner-up votes); None if the soundtracks never
+    # agree (two far-apart mics mostly hear their own local crowd).
+    try:
+        fa, fr = _flux(va), _flux(vr)
+    except Exception:
+        return None
+    rate = 100.0
+    la, lr = len(fa) / rate, len(fr) / rate
+    votes = []
+    for chunk, hop in ((10.0, 5.0), (20.0, 10.0)):
+        lo = max(0.0, -centre - span)
+        hi = min(la, lr - centre + span) - chunk
+        for c0 in np.arange(lo, hi, hop):
+            a = fa[int(c0 * rate):int((c0 + chunk) * rate)]
+            if a.std() < 1e-9:
+                continue
+            best = (-2.0, None)
+            for lag in np.arange(centre - span, centre + span, 1.0 / rate):
+                i0 = int(round((c0 + lag) * rate))
+                b = fr[max(0, i0):max(0, i0 + len(a))]
+                if len(b) < len(a):
+                    continue
+                aa = a - a.mean()
+                bb = b - b.mean()
+                d = np.sqrt((aa * aa).sum() * (bb * bb).sum())
+                if d > 0:
+                    r = float((aa * bb).sum() / d)
+                    if r > best[0]:
+                        best = (r, float(lag))
+            if best[1] is not None and best[0] > 0.10:
+                votes.append(best[1])
+    if not votes:
+        return None
+    lags = np.array(votes)
+    top = (0, None)
+    for x in lags:
+        k = int(np.sum(np.abs(lags - x) <= 0.75))
+        if k > top[0]:
+            top = (k, x)
+    cl = lags[np.abs(lags - top[1]) <= 0.75]
+    rest = lags[np.abs(lags - top[1]) > 0.75]
+    runner = 0
+    for x in rest:
+        runner = max(runner, int(np.sum(np.abs(rest - x) <= 0.75)))
+    return float(cl.mean()), int(len(cl)), runner
+
+
 def resolve(force=False, quiet=False):
     # work the whole sync table out once and cache it
     if not force and os.path.exists(CACHE):
@@ -202,9 +281,8 @@ def resolve(force=False, quiet=False):
         ryan_start[n] = stop + datetime.timedelta(seconds=tz - dur)
 
     # alex's stamps are recording starts on a clock that runs a constant bit
-    # fast; fit that constant from the capped angle envelopes (ramps and
-    # stops count, plateau ripple doesn't), then refine each trial's offset
-    # near the stamp prediction
+    # fast; the capped angle envelopes give a first content-based estimate of
+    # each offset, and the audio voting then pins whichever trials it can
     d0, env = {}, {}
     for n in (1, 2, 3, 4):
         kind, start, _ = spans[("alex", n)]
@@ -216,19 +294,33 @@ def resolve(force=False, quiet=False):
         tr, thr = _theta_curve("ryan", n)
         env[n] = xcorr_lag(ta, np.minimum(tha, 22), tr, np.minimum(thr, 22),
                            centre=d0[n] - 45, span=60)
-    skew = float(np.median([d0[n] - env[n] for n in (1, 2, 3, 4)]))
+
+    audio, locked = {}, {}
+    for n in (1, 2, 3, 4):
+        audio[n] = audio_offset(vids[("alex", n)], vids[("ryan", n)], env[n])
+        if audio[n] and audio[n][1] >= 8 and audio[n][1] >= 1.7 * audio[n][2]:
+            locked[n] = audio[n][0]
+    pool = locked or env
+    skew = float(np.median([d0[n] - pool[n] for n in pool]))
 
     table = {"timezone_hours": tz / 3600.0, "alex_clock_fast_s": round(skew, 1),
              "trials": {}}
     for n in (1, 2, 3, 4):
-        # the envelope may fine-tune a trial by a few seconds; if it strays
-        # further it lost its grip (junky readings), so the stamps stand
         pred = d0[n] - skew
-        off = env[n] if abs(env[n] - pred) <= 5 else pred
+        if n in locked:
+            off, src = locked[n], "audio"
+        else:
+            # no acoustic consensus - the stamps stand, but a single bad stop
+            # stamp can be seconds off, so say so out loud
+            off, src = pred, "stamps"
+            hint = (f" (best cluster {audio[n][0]:+.1f}, {audio[n][1]} v "
+                    f"{audio[n][2]} votes)") if audio[n] else ""
+            say(f"trial {n}: audio inconclusive{hint}; falling back to the "
+                f"stamps - worth checking against the footage")
         ps, run = phones[n]
         lag_r = (ryan_start[n] - ps).total_seconds()
         lag_a = lag_r + off
-        say(f"trial {n}: ryan = alex {off:+.1f}s (stamps {pred:+.1f}, "
+        say(f"trial {n}: ryan = alex {off:+.1f}s [{src}] (stamps {pred:+.1f}, "
             f"envelope {env[n]:+.1f})   phone lag: alex {lag_a:+.1f}s ryan {lag_r:+.1f}s")
         table["trials"][str(n)] = {
             "alex": os.path.relpath(vids[("alex", n)], ROOT).replace("\\", "/"),
@@ -236,6 +328,7 @@ def resolve(force=False, quiet=False):
             "off_alex_to_ryan": round(off, 2),
             "lag_alex": round(lag_a, 2),
             "lag_ryan": round(lag_r, 2),
+            "source": src,
         }
     os.makedirs(os.path.dirname(CACHE), exist_ok=True)
     with open(CACHE, "w", encoding="utf-8") as f:

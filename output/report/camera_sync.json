@@ -1,34 +1,38 @@
 {
   "timezone_hours": 10.0,
-  "alex_clock_fast_s": 42.8,
+  "alex_clock_fast_s": 40.8,
   "trials": {
     "1": {
       "alex": "Videos/Alex's persepctive/probably trial 1.MOV",
       "ryan": "Videos/Physics video, Ryan Perspective/probably trial 1.mp4",
-      "off_alex_to_ryan": -94.86,
-      "lag_alex": 425.16,
-      "lag_ryan": 520.03
+      "off_alex_to_ryan": -91.49,
+      "lag_alex": 428.54,
+      "lag_ryan": 520.03,
+      "source": "audio"
     },
     "2": {
       "alex": "Videos/Alex's persepctive/probably trial 2.MOV",
       "ryan": "Videos/Physics video, Ryan Perspective/trial 2.mp4",
-      "off_alex_to_ryan": -198.61,
-      "lag_alex": 279.91,
-      "lag_ryan": 478.52
+      "off_alex_to_ryan": -196.86,
+      "lag_alex": 281.67,
+      "lag_ryan": 478.52,
+      "source": "audio"
     },
     "3": {
       "alex": "Videos/Alex's persepctive/trial 3.MOV",
       "ryan": "Videos/Physics video, Ryan Perspective/trial 3.mp4",
-      "off_alex_to_ryan": -107.93,
-      "lag_alex": 340.89,
-      "lag_ryan": 448.82
+      "off_alex_to_ryan": -107.24,
+      "lag_alex": 341.58,
+      "lag_ryan": 448.82,
+      "source": "stamps"
     },
     "4": {
       "alex": "Videos/Alex's persepctive/trial 4.MOV",
       "ryan": "Videos/Physics video, Ryan Perspective/trial 4.mp4",
-      "off_alex_to_ryan": -24.03,
-      "lag_alex": 344.3,
-      "lag_ryan": 368.32
+      "off_alex_to_ryan": -16.01,
+      "lag_alex": 352.31,
+      "lag_ryan": 368.32,
+      "source": "audio cluster + rotor-lift frames (pinned)"
     }
   }
 }
