@@ -59,8 +59,9 @@ for n in ("1", "2", "3", "4"):
 
     a = accel.load(os.path.join(ROOT, "data", PHONE[n]))
     tp = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()
-    at_col = next(c for c in a.columns if c.strip().lower().startswith("at"))
-    aT = pd.to_numeric(a[at_col], errors="coerce").to_numpy()
+    cols = {"ax": a.columns[1], "ay": a.columns[2], "az": a.columns[3], "aT": a.columns[4]}
+    comp = {k: pd.to_numeric(a[c], errors="coerce").to_numpy() for k, c in cols.items()}
+    aT = comp["aT"]
     aT_s = accel.ema(aT, 2 / 301)
 
     va = pd.read_csv(angle_csv(n, "alex"))
@@ -81,12 +82,20 @@ for n in ("1", "2", "3", "4"):
                       left=np.nan, right=np.nan)
         return x
 
+    def on_grid(series):
+        return np.round(np.interp(grid, tp, np.nan_to_num(series)), 4)
+
+    aT_on = on_grid(aT_s)
     out = pd.DataFrame({
         "time_s": grid,                                   # phone clock
         "t_from_ride_start_s": np.round(grid - t_ride, 3),
-        "phone_aT_ms2": np.round(np.interp(grid, tp, np.nan_to_num(aT_s)), 4),
-        "phone_angle_deg": np.round(np.degrees(np.arctan(
-            np.interp(grid, tp, np.nan_to_num(aT_s)) / G)), 3),
+        # full accelerometer record (phyphox linear acceleration), aligned:
+        "phone_ax_ms2": on_grid(comp["ax"]),
+        "phone_ay_ms2": on_grid(comp["ay"]),
+        "phone_az_ms2": on_grid(comp["az"]),
+        "phone_aT_ms2": on_grid(aT),                      # total, raw
+        "phone_aT_smooth_ms2": aT_on,                     # total, smoothed
+        "phone_angle_deg": np.round(np.degrees(np.arctan(aT_on / G)), 3),
         "alex_video_angle_deg": np.round(video_on_grid(va, lag_a, "theta_ema"), 3),
         "ryan_video_angle_deg": np.round(video_on_grid(vr, lag_r, "theta_ema"), 3),
     })

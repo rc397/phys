@@ -103,11 +103,14 @@ the queue does not, so disagreement there is expected rather than error.
 python scripts/synced_sheet.py
 ```
 
-writes `output/report/trial N_synced_data.csv` for each trial: the phone
-acceleration and both cameras' fly-out angles resampled onto one shared time
-column (columns `time_s`, `t_from_ride_start_s`, `phone_aT_ms2`,
-`phone_angle_deg`, `alex_video_angle_deg`, `ryan_video_angle_deg`). Every row is
-the same real instant across all three instruments, using the offsets from
+writes `output/report/trial N_synced_data.csv` for each trial: the full phone
+accelerometer record and both cameras' fly-out angles resampled onto one shared
+time column. Columns: `time_s` and `t_from_ride_start_s` (shared clock, the
+second measured from when the ride spins up); `phone_ax_ms2`, `phone_ay_ms2`,
+`phone_az_ms2`, `phone_aT_ms2` (the raw phyphox linear acceleration);
+`phone_aT_smooth_ms2` and `phone_angle_deg` (smoothed total and its
+arctan(aT/g)); `alex_video_angle_deg`, `ryan_video_angle_deg`. Every row is the
+same real instant across all three instruments, using the offsets from
 `camera_sync.json`, so it charts directly in Excel with no manual lining-up.
 Cells are blank where a camera was not yet rolling.
 
