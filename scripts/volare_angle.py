@@ -656,6 +656,60 @@ def finish(df, eps, args):
     return df, steady, steady_sd, plateau
 
 
+def steady_spans(times, plateau, gap=12.0):
+    # merge the scattered steady-state windows (theta within 2.5 deg of p90)
+    # into a few contiguous stretches so they can be shaded as one region
+    tpl = np.asarray(times)[np.asarray(plateau)]
+    if not len(tpl):
+        return []
+    spans = [[tpl[0], tpl[0]]]
+    for t in tpl[1:]:
+        if t - spans[-1][1] <= gap:
+            spans[-1][1] = t
+        else:
+            spans.append([t, t])
+    return spans
+
+
+def plot_angle(df, steady, plateau, eps, video, png, show=False):
+    # top: theta(t) with the wave band and the ride phases marked; bottom:
+    # g tan theta. shading the windows the steady mean is averaged over ties
+    # the dashed number to a visible stretch (spin-up and slow-down fall either
+    # side of it), so "steady-state" is not just a line floating on the plot.
+    if not show:
+        matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True, constrained_layout=True)
+    a1.fill_between(df["time"], df["lo"], df["hi"], color="#f2c7c0", alpha=0.6,
+                    label="per-window spread (the wave)")
+    a1.plot(df["time"], df["theta"], ".", color=accel.C_RAW, ms=4, label="per window")
+    a1.plot(df["time"], df["theta_ema"], color=accel.C_EMA, lw=2, label="smoothed")
+    spans = steady_spans(df["time"].to_numpy(), plateau)
+    for k, (s, e) in enumerate(spans):
+        a1.axvspan(s, e, color="#8fb3d9", alpha=0.18,
+                   label="steady state (angle averaged here)" if k == 0 else None)
+    a1.axhline(steady, color=accel.C_FIT, lw=1.2, ls="--",
+               label=f"steady-state mean {steady:.1f} deg")
+    if spans:
+        # name the run phases once, above the plateau
+        smid = 0.5 * (spans[0][0] + spans[-1][1])
+        a1.annotate("spin-up", (spans[0][0], 4), (spans[0][0] - 2, 4), fontsize=8,
+                    ha="right", va="bottom", color="#555555")
+        a1.annotate("slow-down", (spans[-1][1], 4), (spans[-1][1] + 2, 4), fontsize=8,
+                    ha="left", va="bottom", color="#555555")
+    a1.set_ylabel("fly-out angle theta (deg)")
+    a1.legend(loc="lower center", fontsize=8, ncols=5)
+    accel.style_axis(a1)
+    a2.plot(df["time"], G * np.tan(np.radians(df["theta_ema"])), color=accel.C_FIT, lw=1.6)
+    a2.set_ylabel(r"$g\,\tan\theta$  (m/s$^2$)")
+    a2.set_xlabel("time (s)")
+    accel.style_axis(a2)
+    fig.suptitle(f"Fly-out angle, automatic: {os.path.basename(video)}   "
+                 f"(elevation-corrected {eps:.0f} deg)", fontsize=12, fontweight="bold")
+    fig.savefig(png, dpi=150)
+    plt.close(fig)
+
+
 def analyse(video, args):
     import cv2
     cap = cv2.VideoCapture(video)
@@ -684,26 +738,7 @@ def analyse(video, args):
     print(f"Steady:  theta = {steady:.1f} +/- {steady_sd:.1f} deg   "
           f"g tan = {G*np.tan(np.radians(steady)):.1f} m/s^2")
 
-    if not args.show:
-        matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    fig, (a1, a2) = plt.subplots(2, 1, figsize=(11, 6), sharex=True, constrained_layout=True)
-    a1.fill_between(df["time"], df["lo"], df["hi"], color="#f2c7c0", alpha=0.6,
-                    label="p10-p90 (wave)")
-    a1.plot(df["time"], df["theta"], ".", color=accel.C_RAW, ms=4, label="per window")
-    a1.plot(df["time"], df["theta_ema"], color=accel.C_EMA, lw=2, label="smoothed")
-    a1.axhline(steady, color=accel.C_FIT, lw=1.2, ls="--", label=f"steady {steady:.1f} deg")
-    a1.set_ylabel("fly-out angle theta (deg)")
-    a1.legend(loc="lower center", fontsize=9, ncols=4)
-    accel.style_axis(a1)
-    a2.plot(df["time"], G * np.tan(np.radians(df["theta_ema"])), color=accel.C_FIT, lw=1.6)
-    a2.set_ylabel(r"$g\,\tan\theta$  (m/s$^2$)")
-    a2.set_xlabel("time (s)")
-    accel.style_axis(a2)
-    fig.suptitle(f"Fly-out angle, automatic: {os.path.basename(video)}   "
-                 f"(elevation-corrected {eps:.0f} deg)", fontsize=12, fontweight="bold")
-    fig.savefig(png, dpi=150)
-    plt.close(fig)
+    plot_angle(df, steady, plateau, eps, video, png, args.show)
     df.to_csv(csv, index=False)
     print(f"Graph:   {png}")
     print(f"Data:    {csv}")
