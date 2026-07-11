@@ -68,6 +68,23 @@ for trial in (1, 2, 3, 4):
              label="phone  arctan(aT/g)")
     ax1.plot(tp[keep], th_w[keep], color="#123f8f", lw=2.2,
              label="phone, wave-averaged")
+    # the ride also does empty warm-up / re-spins; the phone is in the queue
+    # then, so the camera sees an angle while the phone reads flat. shade those
+    # so the split doesn't read as a measurement error
+    ph_on_grid = np.interp(v["time"], tp[keep], th_p[keep], left=0, right=0)
+    solo = (v["theta_ema"].to_numpy() > 15) & (ph_on_grid < 5)
+    if solo.any():
+        tarr = v["time"].to_numpy()
+        start = None
+        first = True
+        for i, s in enumerate(solo):
+            if s and start is None:
+                start = tarr[i]
+            if (not s or i == len(solo) - 1) and start is not None:
+                ax1.axvspan(start, tarr[i], color="#bbbbbb", alpha=0.18,
+                            label="ride spinning, phone not on it" if first else None)
+                first = False
+                start = None
     ax1.set_ylabel("fly-out angle  (deg)")
     ax1.legend(loc="upper left", fontsize=9, framealpha=0.9)
     accel.style_axis(ax1)
