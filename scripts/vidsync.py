@@ -1,7 +1,7 @@
 # clock sync between the phone and the two cameras. coarse from the files'
 # own recording timestamps (alex's iphone clock ran ~41s fast that day, fitted
 # out), fine from correlating the two soundtracks. cached in
-# output/report/camera_sync.json - trials 3+4 pinned after frame-checking.
+# output/report/camera_sync.json, with trials 3+4 pinned after frame checks.
 import datetime
 import glob
 import json
@@ -166,7 +166,7 @@ def _flux(video):
 
 
 def audio_offset(va, vr, centre, span=16.0):
-    # each audio chunk votes for its best lag - a real lock is a tight cluster.
+    # each audio chunk votes for its best lag, and a real lock is a tight cluster.
     # returns (offset, cluster votes, runner-up votes) or None
     try:
         fa, fr = _flux(va), _flux(vr)
@@ -227,7 +227,7 @@ def resolve(force=False, quiet=False):
     spans = {k: recording_span(v) for k, v in vids.items()}
     phones = {n: phone_recording(n) for n in (1, 2, 3, 4)}
 
-    # ryan's stamps are UTC - find the timezone that fits all four trials
+    # ryan's stamps are UTC, so find the timezone that fits all four trials
     tz = None
     for cand in range(-12 * 3600, 14 * 3600 + 1, 1800):
         ok = True
@@ -255,7 +255,7 @@ def resolve(force=False, quiet=False):
         _, stop, dur = spans[("ryan", n)]
         ryan_start[n] = stop + datetime.timedelta(seconds=tz - dur)
 
-    # alex's clock skew is constant, so fit it across the trials - the angle
+    # alex's clock skew is constant, so fit it across the trials. the angle
     # envelopes give a rough offset first, audio then pins what it can
     d0, env = {}, {}
     for n in (1, 2, 3, 4):

@@ -1,4 +1,4 @@
-# video tan(theta) vs the phone's horizontal acceleration - force balance
+# video tan(theta) vs the phone's horizontal acceleration. force balance
 # on the hanging chair says tan(theta) = a/g.
 #   python scripts/angle_vs_accel.py
 import os
@@ -21,7 +21,7 @@ pts = {"alex": [[], []], "ryan": [[], []]}
 for n in ("1", "2", "3", "4"):
     d = pd.read_csv(os.path.join(ROOT, "output", "report", f"trial {n}_synced_data.csv"))
     a = d["phone_aT_smooth_ms2"].to_numpy()
-    # ramp-up and plateau only - the chairs lag the falling accel on spin-down
+    # ramp-up and plateau only. the chairs lag the falling accel on spin-down
     hold = np.where(a >= 0.85 * np.nanmax(a))[0][-1]
     ok0 = (np.arange(len(a)) <= hold) & (a > 1.5)
     for cam, col in (("alex", "alex_video_angle_deg"), ("ryan", "ryan_video_angle_deg")):
