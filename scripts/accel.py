@@ -67,6 +67,12 @@ def ema(x, alpha):
     return y
 
 
+def smooth(x, alpha):
+    # zero-phase: run the EMA forward then backward so the lag cancels
+    f = ema(np.asarray(x, float), alpha)
+    return ema(f[::-1], alpha)[::-1]
+
+
 def active_window(t, mag, pad=3.0, level=0.015, smooth_s=2.0, gap_s=10.0):
     dt = np.nanmedian(np.diff(t))
     if not np.isfinite(dt) or dt <= 0:

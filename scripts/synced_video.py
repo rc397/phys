@@ -94,7 +94,7 @@ def build(trial):
     a = accel.load(os.path.join(ROOT, "data", ACCEL[trial]))
     ta = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()
     at = pd.to_numeric(a[a.columns[4]], errors="coerce").to_numpy()
-    at_s = accel.ema(at, 2 / 151)
+    at_s = accel.smooth(at, 2 / 151)
     at_w = pd.Series(at_s).rolling(801, center=True, min_periods=100).mean().to_numpy()
 
     pa, pr = Player(va), Player(vr)

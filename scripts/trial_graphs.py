@@ -60,7 +60,7 @@ for trial in (1, 2, 3, 4):
     a = accel.load(pcsv)
     ta = pd.to_numeric(a[accel.find_time(a)], errors="coerce").to_numpy()
     at = pd.to_numeric(a[a.columns[4]], errors="coerce").to_numpy()
-    at_s = accel.ema(at, 2 / 151)                    # ~1.5 s smoothing at 100 Hz
+    at_s = accel.smooth(at, 2 / 151)                 # zero-phase, ~1.5 s
     # average over the ~5-6 s wave for the comparison line
     at_w = pd.Series(at_s).rolling(801, center=True, min_periods=100).mean().to_numpy()
 

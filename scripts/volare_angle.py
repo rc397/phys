@@ -604,7 +604,7 @@ def finish(df, eps, args):
     for c in ("theta_apparent", "lo", "hi"):
         out = "theta" if c == "theta_apparent" else c
         df[out] = [deproject(v, eps) for v in df[c]]
-    df["theta_ema"] = accel.ema(df["theta"].to_numpy(), 2 / (args.smooth + 1))
+    df["theta_ema"] = accel.smooth(df["theta"].to_numpy(), 2 / (args.smooth + 1))
     top = np.percentile(df["theta"], 90)             # robust: outliers cannot set it
     plateau = df["theta"] >= top - 2.5
     steady = float(df.loc[plateau, "theta"].mean())
@@ -711,7 +711,7 @@ def accel_compare(res, accel_csv, args):
         return
     ta = pd.to_numeric(a[tcol], errors="coerce").to_numpy()
     at = pd.to_numeric(a[at_col], errors="coerce").to_numpy()
-    at_s = accel.ema(at, 2 / 301)
+    at_s = accel.smooth(at, 2 / 301)
     th_a = np.degrees(np.arctan(at_s / G))
     # clocks from vidsync; unknown footage falls back to correlation
     import vidsync

@@ -26,7 +26,7 @@ def angle_csv(trial, cam):
 
 def ride_start(tp, aT):
     # start of the longest sustained flying stretch = ride start
-    th = np.degrees(np.arctan(accel.ema(aT, 2 / 301) / G))
+    th = np.degrees(np.arctan(accel.smooth(aT, 2 / 301) / G))
     g = np.arange(tp.min(), tp.max(), 0.1)
     on = np.interp(g, tp, np.nan_to_num(th)) > 15
     segs, i = [], 0
@@ -58,7 +58,7 @@ for n in ("1", "2", "3", "4"):
     cols = {"ax": a.columns[1], "ay": a.columns[2], "az": a.columns[3], "aT": a.columns[4]}
     comp = {k: pd.to_numeric(a[c], errors="coerce").to_numpy() for k, c in cols.items()}
     aT = comp["aT"]
-    aT_s = accel.ema(aT, 2 / 301)
+    aT_s = accel.smooth(aT, 2 / 301)
 
     va = pd.read_csv(angle_csv(n, "alex"))
     vr = pd.read_csv(angle_csv(n, "ryan"))
