@@ -73,7 +73,7 @@ for n in ("1", "2", "3", "4"):
     t_ride = ride_start(tp, aT)
 
     def video_on_grid(v, lag, col):
-        # video column sampled at grid; blank where the camera had no footage
+        # video column sampled at grid - blank where the camera had no footage
         x = np.interp(grid, v["time"].to_numpy() + lag, v[col].to_numpy(),
                       left=np.nan, right=np.nan)
         return x

@@ -34,13 +34,14 @@ for n in ("1", "2", "3", "4"):
         ax.plot(x[::4], y[::4], MARKS[n], color=color, ms=3, alpha=0.25)
 
 xs = np.linspace(0, 17, 50)
-ax.plot(xs, xs / G, color="#123f8f", lw=2.4, label="force balance:  tan θ = a / g")
+ax.plot(xs, xs / G, color="#123f8f", lw=2.4,
+        label=f"force balance:  tan θ = a / g   (slope 1/g = {1 / G:.3f})")
 for cam, color in (("alex", accel.C_EMA), ("ryan", "#2e8b57")):
     x = np.concatenate(pts[cam][0])
     y = np.concatenate(pts[cam][1])
     slope = float((x * y).sum() / (x * x).sum())
     ax.plot(xs, xs * slope, color=color, lw=1.6, ls="--",
-            label=f"video {cam} fit:  slope {slope:.4f}  (1/g = {1 / G:.4f})")
+            label=f"video {cam} trend:  slope ≈ {slope:.2f}")
     ax.plot([], [], "o", color=color, ms=5, alpha=0.6, label=f"video {cam}, all trials")
 
 ax.set_xlabel("phone horizontal acceleration  a  (m/s$^2$)")

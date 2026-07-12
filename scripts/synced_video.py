@@ -55,7 +55,7 @@ class Player:
 
 
 def accel_strip(ta, at_s, at_w, t0, t1, width):
-    # pre-rendered acceleration trace; the per-frame cursor is drawn on a copy
+    # pre-rendered acceleration trace - the per-frame cursor is drawn on a copy
     img = np.full((STRIP_H, width, 3), 250, np.uint8)
     x0, x1, y0, y1 = 46, width - 12, STRIP_H - 26, 10
     top = np.nanmax(at_s) * 1.08
@@ -100,7 +100,7 @@ def build(trial):
     pa, pr = Player(va), Player(vr)
     dur_a = pa.cap.get(cv2.CAP_PROP_FRAME_COUNT) / pa.fps
     dur_r = pr.cap.get(cv2.CAP_PROP_FRAME_COUNT) / pr.fps
-    # master clock is the phone's; play only where all three overlap
+    # master clock is the phone's - play only where all three overlap
     t0 = max(lag_a, lag_r, ta.min())
     t1 = min(lag_a + dur_a, lag_r + dur_r, ta.max())
     if t1 - t0 < 20:

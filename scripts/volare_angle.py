@@ -70,7 +70,7 @@ def banner(img, lines):
 
 
 def draw_gauge(img, apex, vref, d, ang, dim=False):
-    # gauge overlay; dim = held reading between verified frames
+    # gauge overlay - dim = held reading between verified frames
     import cv2
     wedge = (140, 160, 170) if dim else (60, 200, 255)
     rope = (120, 130, 140) if dim else (40, 150, 255)
@@ -248,7 +248,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
     rej = {"few_px": 0, "still": 0, "cam": 0, "few_side": 0, "no_chain": 0,
            "refit": 0, "range": 0, "kept": 0, "held": 0}
     bg_area = max(1, int(np.count_nonzero(roi == 0)))
-    # re-fit a found chain on later frames; a lock lives ~2 s
+    # re-fit a found chain on later frames - a lock lives ~2 s
     lock = {"left": None, "right": None}
     max_hold = max(3, int(round(2.0 * fps / step)))
     rot_streak = 0                                   # rotation must persist to count
@@ -474,7 +474,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
                 held = m is not None
             if m is None:
                 if st is not None:
-                    # could not re-verify this frame; show the last reading dimmed
+                    # could not re-verify this frame - show the last reading dimmed
                     got.append((side, st["top"], down(st["dvec"]), st["ang"], True))
                 continue
             ang, pts, dvec, a0 = m
@@ -495,7 +495,7 @@ def measure(cap, fps, ntot, cal, args, video, annot_path=None):
 
 
 def aggregate(meas, sweep_area, activity, a_min, args):
-    # window into theta(t); idle windows become rest rows (theta 0)
+    # window into theta(t) - idle windows become rest rows (theta 0)
     m = pd.DataFrame(meas, columns=["t", "side", "theta", "agree"])
     act = pd.DataFrame(activity, columns=["t", "px", "rotating"])
     win = args.win
@@ -515,7 +515,7 @@ def aggregate(meas, sweep_area, activity, a_min, args):
                          "lo": 0.0, "hi": 0.0, "n": 0, "sides": 0, "rest": 1})
         elif w in groups:
             grp = groups[w]
-            # stats use fresh finds only; re-locks are just for the check video
+            # stats use fresh finds only - re-locks are just for the check video
             fresh = grp[grp["agree"] >= 0.99]
             if len(fresh) >= 5:
                 grp = fresh
@@ -627,7 +627,7 @@ def steady_spans(times, plateau, gap=12.0):
 
 
 def plot_angle(df, steady, plateau, eps, video, png, show=False):
-    # theta(t) with the wave band; shade where the steady mean comes from
+    # theta(t) with the wave band - shade where the steady mean comes from
     if not show:
         matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -713,7 +713,7 @@ def accel_compare(res, accel_csv, args):
     at = pd.to_numeric(a[at_col], errors="coerce").to_numpy()
     at_s = accel.smooth(at, 2 / 301)
     th_a = np.degrees(np.arctan(at_s / G))
-    # clocks from vidsync; unknown footage falls back to correlation
+    # clocks from vidsync - unknown footage falls back to correlation
     import vidsync
     grid = 0.5
     tv = df["time"].to_numpy()

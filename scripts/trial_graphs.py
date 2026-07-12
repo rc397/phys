@@ -79,7 +79,7 @@ for trial in (1, 2, 3, 4):
     tp = ta - lag                                    # phone time on the video clock
     keep = (tp >= 0) & (tp <= v["time"].max())
 
-    # zero the clock at ride start; the phone recorded for ages in the queue
+    # zero the clock at ride start - the phone recorded for ages in the queue
     ride = ride_window(tp, np.nan_to_num(at_s))
     t0, t_end = ride if ride else (0.0, v["time"].max())
     vt = v["time"].to_numpy() - t0                    # video time, ride-relative

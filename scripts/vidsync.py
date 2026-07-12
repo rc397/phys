@@ -166,7 +166,7 @@ def _flux(video):
 
 
 def audio_offset(va, vr, centre, span=16.0):
-    # each audio chunk votes for its best lag; a real lock is a tight cluster.
+    # each audio chunk votes for its best lag - a real lock is a tight cluster.
     # returns (offset, cluster votes, runner-up votes) or None
     try:
         fa, fr = _flux(va), _flux(vr)
@@ -255,7 +255,7 @@ def resolve(force=False, quiet=False):
         _, stop, dur = spans[("ryan", n)]
         ryan_start[n] = stop + datetime.timedelta(seconds=tz - dur)
 
-    # alex's clock skew is constant, so fit it across the trials; the angle
+    # alex's clock skew is constant, so fit it across the trials - the angle
     # envelopes give a rough offset first, audio then pins what it can
     d0, env = {}, {}
     for n in (1, 2, 3, 4):
