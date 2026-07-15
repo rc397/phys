@@ -130,7 +130,7 @@ for trial in (1, 2, 3, 4):
 
     fig.suptitle(f"Trial {trial}: fly-out angle (video) and rider acceleration (phone)",
                  fontsize=13, fontweight="bold")
-    out = os.path.join(ROOT, "output", "report", f"trial {trial}_theta_accel.png")
+    out = os.path.join(ROOT, "output", "visuals", f"trial {trial}_theta_accel.png")
     accel.save(fig, out)
     plt.close(fig)
     print(f"trial {trial}: {out}   (phone shifted {lag:+.1f}s onto the video clock)")

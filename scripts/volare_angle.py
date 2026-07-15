@@ -737,7 +737,7 @@ def accel_compare(res, accel_csv, args):
     base = os.path.splitext(os.path.basename(res["video"]))[0]
     tag = camera_tag(res["video"])
     fig.suptitle(f"Video ({tag}) vs accelerometer: {base}", fontsize=12, fontweight="bold")
-    out = os.path.join(args.outdir or os.path.join(ROOT, "output", "accel"),
+    out = os.path.join(args.outdir or os.path.join(ROOT, "output", "visuals"),
                        f"{base}_vs_accel_{tag}.png")
     accel.save(fig, out)
     plt.close(fig)

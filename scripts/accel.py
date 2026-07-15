@@ -124,15 +124,17 @@ def resolve_alpha(args):
 
 
 def out_paths_for(out, outdir, here, infile, suffix):
+    # plots go to output/visuals, the data csv stays in its own folder
     if out:
         png = out
         csv = os.path.splitext(out)[0] + ".csv"
     else:
         d = outdir or os.path.join(here, "output")
         base = os.path.splitext(os.path.basename(infile))[0]
-        png = os.path.join(d, base + suffix + ".png")
+        png = os.path.join(here, "output", "visuals", base + suffix + ".png")
         csv = os.path.join(d, base + suffix + ".csv")
-    os.makedirs(os.path.dirname(os.path.abspath(png)), exist_ok=True)
+    for p in (png, csv):
+        os.makedirs(os.path.dirname(os.path.abspath(p)), exist_ok=True)
     return png, csv
 
 

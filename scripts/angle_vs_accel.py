@@ -52,6 +52,6 @@ ax.legend(fontsize=9, loc="upper left")
 accel.style_axis(ax)
 ax.set_title("Fly-out angle vs measured acceleration: the tan θ = a/g test",
              fontsize=12, fontweight="bold")
-out = os.path.join(ROOT, "output", "report", "tan_theta_vs_accel.png")
+out = os.path.join(ROOT, "output", "visuals", "tan_theta_vs_accel.png")
 accel.save(fig, out)
 print(out)

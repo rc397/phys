@@ -110,7 +110,7 @@ def build(trial):
     W = 2 * PANE_W
     H = HEAD_H + PANE_H + STRIP_H
     base_strip, X, Y = accel_strip(ta, at_s, at_w, t0, t1, W)
-    out = os.path.join(ROOT, "output", "report", f"trial {trial}_synced.mp4")
+    out = os.path.join(ROOT, "output", "visuals", f"trial {trial}_synced.mp4")
     vw = cv2.VideoWriter(out, cv2.VideoWriter_fourcc(*"mp4v"), OUT_FPS, (W, H))
 
     for T in np.arange(t0, t1, 1.0 / OUT_FPS):
