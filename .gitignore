@@ -3,25 +3,19 @@ __pycache__/
 .claude/
 .DS_Store
 
-# raw footage is far too big for git
+# raw footage stays out, every clip is far past github's 100 MB file limit
 Videos/
 *.MOV
 
 # per-video calibration caches
 *.volare.json
 *.volare_masks.npz
-
-# verification videos are large; regenerate with --annot
-output/**/*_annot.mp4
+*.volare_motion.npz
+*.volare_flux.npz
 
 # other groups' data, kept local only
 miachen*
 output/miachen*
-
-# synced three-view videos are large; regenerate with scripts/synced_video.py
-output/**/*_synced.mp4
-*.volare_motion.npz
-*.volare_flux.npz
 
 # local working notes
 REPORT_NOTES.md
