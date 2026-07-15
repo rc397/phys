@@ -143,3 +143,9 @@ def out_paths(args, here, suffix):
 def style_axis(ax):
     ax.grid(True, color=C_GRID, lw=0.6)
     ax.spines[["top", "right"]].set_visible(False)
+
+
+def save(fig, png_path, dpi=150):
+    # png for quick viewing, svg alongside it for print quality
+    fig.savefig(png_path, dpi=dpi)
+    fig.savefig(os.path.splitext(png_path)[0] + ".svg")

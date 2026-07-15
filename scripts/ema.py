@@ -85,7 +85,7 @@ def main():
     fig.suptitle(f"Acceleration: raw vs EMA  ({tag})", fontsize=13, fontweight="bold")
 
     png, csv = accel.out_paths(args, ROOT, "_ema")
-    fig.savefig(png, dpi=150)
+    accel.save(fig, png)
     pd.DataFrame(out).to_csv(csv, index=False)
     print(f"Graph:   {png}")
     print(f"Data:    {csv}")

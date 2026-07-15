@@ -658,7 +658,7 @@ def plot_angle(df, steady, plateau, eps, video, png, show=False):
     accel.style_axis(a2)
     fig.suptitle(f"Fly-out angle, automatic: {os.path.basename(video)}   "
                  f"(elevation-corrected {eps:.0f} deg)", fontsize=12, fontweight="bold")
-    fig.savefig(png, dpi=150)
+    accel.save(fig, png)
     plt.close(fig)
 
 
@@ -739,7 +739,7 @@ def accel_compare(res, accel_csv, args):
     fig.suptitle(f"Video ({tag}) vs accelerometer: {base}", fontsize=12, fontweight="bold")
     out = os.path.join(args.outdir or os.path.join(ROOT, "output", "accel"),
                        f"{base}_vs_accel_{tag}.png")
-    fig.savefig(out, dpi=150)
+    accel.save(fig, out)
     plt.close(fig)
     hi = sa >= 0.8 * np.nanmax(sa)     # plateau only, however long the idle wait was
     print(f"Accel:   steady theta from phone ~ {np.nanmean(sa[hi]):.1f} deg   "

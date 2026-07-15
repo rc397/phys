@@ -89,7 +89,7 @@ def main():
                  fontsize=13, fontweight="bold")
 
     png, csv = accel.out_paths(args, ROOT, "_xy_ema")
-    fig.savefig(png, dpi=150)
+    accel.save(fig, png)
     pd.DataFrame({xlabel: t, "a_xy": axy, "EMA a_xy": axy_ema}).to_csv(csv, index=False)
     print(f"Graph:   {png}")
     print(f"Data:    {csv}")
