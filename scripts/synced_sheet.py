@@ -85,7 +85,7 @@ for n in ("1", "2", "3", "4"):
     out = pd.DataFrame({
         "time_s": grid,                                   # phone clock
         "t_from_ride_start_s": np.round(grid - t_ride, 3),
-        # full accelerometer record (phyphox linear acceleration), aligned:
+        # full accelerometer record (Physics Toolbox linear acceleration), aligned:
         "phone_ax_ms2": on_grid(comp["ax"]),
         "phone_ay_ms2": on_grid(comp["ay"]),
         "phone_az_ms2": on_grid(comp["az"]),
@@ -98,7 +98,7 @@ for n in ("1", "2", "3", "4"):
     out_path = os.path.join(outdir, f"trial {n}_synced_data.csv")
     out.to_csv(out_path, index=False)
 
-    # full-resolution copy: every phyphox sample, a few useful time columns
+    # full-resolution copy: every original sample, a few useful time columns
     raw = pd.DataFrame({
         "time_phone_s": np.round(tp, 4),
         "t_from_ride_start_s": np.round(tp - t_ride, 4),

@@ -95,7 +95,7 @@ def recording_span(path):
 
 
 def phone_recording(n):
-    # phyphox states its start time in the csv header
+    # Physics Toolbox states its start time in the csv header
     path = os.path.join(ROOT, "data", PHONE[n])
     start = None
     with open(path, encoding="utf-8", errors="ignore") as f:

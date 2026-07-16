@@ -1,4 +1,4 @@
-"""EMA smoothing for accelerometer logs (phyphox CSV, etc.).
+"""EMA smoothing for accelerometer logs (Physics Toolbox CSV, etc.).
 Usage: python ema.py <file.csv> [-n SPAN | -a ALPHA] [--show]
 Outputs land in an 'output' folder next to this script.
 """
